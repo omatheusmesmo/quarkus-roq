@@ -9,7 +9,7 @@ Roq started as a solid foundation for building modern apps and static sites. But
 
 ![](the-roq-editor.gif)
 
-## Why This Is a Big Deal
+## Why This Is a Big Deal !
 
 Until now, writers had to:
 
