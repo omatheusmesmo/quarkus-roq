@@ -8,7 +8,7 @@ author: ia3andy
 redirect_from: [first-roq-article-ever]
 ---
 
-Hello folks,
+Hello folks,@
 
 A bunch of Quarkus contributors started this new initiative to allow Static Site Generation with Quarkus (similar to Hugo, Jekyll, Lume, ...).
 
