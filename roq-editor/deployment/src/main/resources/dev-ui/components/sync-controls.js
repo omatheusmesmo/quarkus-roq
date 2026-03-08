@@ -66,7 +66,7 @@ export class SyncControls extends LitElement {
                 theme="primary small"
                 ?disabled="${!canPublish}"
                 @click="${this._onPublishClick}">
-                <vaadin-icon icon="${hasConflicts ? 'font-awesome-solid:check-double' : 'font-awesome-solid:cloud-arrow-up'}" slot="prefix"></vaadin-icon>
+                <vaadin-icon icon="font-awesome-solid:cloud-arrow-up" slot="prefix"></vaadin-icon>
                 ${this.publishing ? 'Publishing...' : (hasConflicts ? 'Resolve & Publish' : 'Publish')}
             </vaadin-button>
         `;
