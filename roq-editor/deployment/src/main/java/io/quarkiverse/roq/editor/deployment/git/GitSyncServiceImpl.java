@@ -59,7 +59,8 @@ public class GitSyncServiceImpl implements GitSyncService {
     public GitStatusInfo getStatus(String passphrase, boolean skipFetch) {
         try (Repository repository = openRepository()) {
             if (repository == null) {
-                return new GitStatusInfo(false, false, false, "no-git-repo", 0, 0, Collections.emptyList(), false, false, "SAFE", Collections.emptyList(), false);
+                return new GitStatusInfo(false, false, false, "no-git-repo", 0, 0, Collections.emptyList(), false, false,
+                        "SAFE", Collections.emptyList(), false);
             }
 
             String currentBranch = repository.getBranch();
@@ -78,7 +79,8 @@ public class GitSyncServiceImpl implements GitSyncService {
                 // AUTH PRIORITY (SSH ONLY)
                 boolean authMissing = isSsh && (passphrase == null || passphrase.isEmpty());
                 if (authMissing) {
-                    return new GitStatusInfo(false, hasUnpublished, false, currentBranch, 0, 0, contentChanges, true, hasConflicts, repoState.name(), conflictFiles, true);
+                    return new GitStatusInfo(false, hasUnpublished, false, currentBranch, 0, 0, contentChanges, true,
+                            hasConflicts, repoState.name(), conflictFiles, true);
                 }
 
                 if (!skipFetch) {
@@ -87,7 +89,8 @@ public class GitSyncServiceImpl implements GitSyncService {
                     } catch (Exception fetchEx) {
                         if (isAuthenticationError(fetchEx) && isSsh) {
                             LOG.warn("SSH authentication failed during fetch poll: " + fetchEx.getMessage());
-                            return new GitStatusInfo(false, hasUnpublished, false, currentBranch, 0, 0, contentChanges, true, hasConflicts, repoState.name(), conflictFiles, true);
+                            return new GitStatusInfo(false, hasUnpublished, false, currentBranch, 0, 0, contentChanges, true,
+                                    hasConflicts, repoState.name(), conflictFiles, true);
                         }
                     }
                 }
@@ -96,7 +99,8 @@ public class GitSyncServiceImpl implements GitSyncService {
                 int aheadCount = (trackingStatus != null) ? trackingStatus.getAheadCount() : 0;
                 int behindCount = (trackingStatus != null) ? trackingStatus.getBehindCount() : 0;
 
-                boolean isUpToDate = aheadCount == 0 && behindCount == 0 && !hasUnpublished && repoState == RepositoryState.SAFE && !hasConflicts;
+                boolean isUpToDate = aheadCount == 0 && behindCount == 0 && !hasUnpublished && repoState == RepositoryState.SAFE
+                        && !hasConflicts;
 
                 return new GitStatusInfo(isUpToDate, hasUnpublished, behindCount > 0, currentBranch,
                         aheadCount, behindCount, contentChanges, false, hasConflicts, repoState.name(), conflictFiles, isSsh);
@@ -104,20 +108,26 @@ public class GitSyncServiceImpl implements GitSyncService {
         } catch (Exception e) {
             boolean isSsh = false;
             try (Repository repository = openRepository()) {
-                if (repository != null) isSsh = isSshUrl(repository.getConfig().getString("remote", "origin", "url"));
-            } catch (Exception ignored) {}
+                if (repository != null)
+                    isSsh = isSshUrl(repository.getConfig().getString("remote", "origin", "url"));
+            } catch (Exception ignored) {
+            }
 
             boolean authFailed = isAuthenticationError(e) && isSsh;
-            if (authFailed) LOG.warn("SSH authentication failed: " + e.getMessage());
-            else if (!isAuthenticationError(e)) LOG.error("Failed to retrieve Git repository status", e);
-            
+            if (authFailed)
+                LOG.warn("SSH authentication failed: " + e.getMessage());
+            else if (!isAuthenticationError(e))
+                LOG.error("Failed to retrieve Git repository status", e);
+
             try (Repository repository = openRepository(); Git git = new Git(repository)) {
                 Status status = git.status().call();
                 String currentBranch = repository.getBranch();
                 List<String> conflictFiles = new ArrayList<>(status.getConflicting());
-                return new GitStatusInfo(false, false, false, currentBranch, 0, 0, Collections.emptyList(), authFailed, !conflictFiles.isEmpty(), repository.getRepositoryState().name(), conflictFiles, isSsh);
+                return new GitStatusInfo(false, false, false, currentBranch, 0, 0, Collections.emptyList(), authFailed,
+                        !conflictFiles.isEmpty(), repository.getRepositoryState().name(), conflictFiles, isSsh);
             } catch (Exception inner) {
-                return new GitStatusInfo(false, false, false, "", 0, 0, Collections.emptyList(), authFailed, false, "ERROR", Collections.emptyList(), isSsh);
+                return new GitStatusInfo(false, false, false, "", 0, 0, Collections.emptyList(), authFailed, false, "ERROR",
+                        Collections.emptyList(), isSsh);
             }
         }
     }
@@ -125,7 +135,8 @@ public class GitSyncServiceImpl implements GitSyncService {
     @Override
     public GitSyncResult sync(String passphrase) {
         try (Repository repository = openRepository(); Git git = new Git(repository)) {
-            if (repository == null) return new GitSyncResult(false, "Git repository not found", false, Collections.emptyList(), false);
+            if (repository == null)
+                return new GitSyncResult(false, "Git repository not found", false, Collections.emptyList(), false);
 
             String remoteUrl = repository.getConfig().getString("remote", "origin", "url");
             boolean isSsh = isSshUrl(remoteUrl);
@@ -150,7 +161,8 @@ public class GitSyncServiceImpl implements GitSyncService {
                 if (!pullResult.isSuccessful()) {
                     syncResult = handleFailedPull(pullResult, git);
                 } else {
-                    syncResult = new GitSyncResult(true, "Synchronized successfully with remote", false, Collections.emptyList(), false);
+                    syncResult = new GitSyncResult(true, "Synchronized successfully with remote", false,
+                            Collections.emptyList(), false);
                 }
             } catch (Exception e) {
                 boolean isAuth = isAuthenticationError(e) && isSsh;
@@ -159,7 +171,8 @@ public class GitSyncServiceImpl implements GitSyncService {
                     syncResult = new GitSyncResult(false, ERR_AUTH_FAILED, false, Collections.emptyList(), true);
                 } else {
                     LOG.error("Content synchronization failed", e);
-                    syncResult = new GitSyncResult(false, "Sync failed: " + e.getMessage(), false, Collections.emptyList(), false);
+                    syncResult = new GitSyncResult(false, "Sync failed: " + e.getMessage(), false, Collections.emptyList(),
+                            false);
                 }
             }
 
@@ -172,9 +185,12 @@ public class GitSyncServiceImpl implements GitSyncService {
                     LOG.warn("Conflicts detected while restoring local changes.");
                     try {
                         Status status = git.status().call();
-                        return new GitSyncResult(false, "Conflicts detected while restoring local changes. Resolve them manually.", true, new ArrayList<>(status.getConflicting()), false);
+                        return new GitSyncResult(false,
+                                "Conflicts detected while restoring local changes. Resolve them manually.", true,
+                                new ArrayList<>(status.getConflicting()), false);
                     } catch (GitAPIException ex) {
-                        return new GitSyncResult(false, "Conflicts detected in stash restore", true, Collections.emptyList(), false);
+                        return new GitSyncResult(false, "Conflicts detected in stash restore", true, Collections.emptyList(),
+                                false);
                     }
                 } catch (Exception e) {
                     LOG.error("Failed to restore stashed changes", e);
@@ -184,16 +200,20 @@ public class GitSyncServiceImpl implements GitSyncService {
         } catch (Exception e) {
             boolean isSsh = false;
             try (Repository repository = openRepository()) {
-                if (repository != null) isSsh = isSshUrl(repository.getConfig().getString("remote", "origin", "url"));
-            } catch (Exception ignored) {}
-            return new GitSyncResult(false, "Sync operation failed: " + e.getMessage(), false, Collections.emptyList(), isAuthenticationError(e) && isSsh);
+                if (repository != null)
+                    isSsh = isSshUrl(repository.getConfig().getString("remote", "origin", "url"));
+            } catch (Exception ignored) {
+            }
+            return new GitSyncResult(false, "Sync operation failed: " + e.getMessage(), false, Collections.emptyList(),
+                    isAuthenticationError(e) && isSsh);
         }
     }
 
     @Override
     public GitSyncResult push(String passphrase) {
         try (Repository repository = openRepository(); Git git = new Git(repository)) {
-            if (repository == null) return new GitSyncResult(false, "Git repository not found", false, Collections.emptyList(), false);
+            if (repository == null)
+                return new GitSyncResult(false, "Git repository not found", false, Collections.emptyList(), false);
 
             String remoteUrl = repository.getConfig().getString("remote", "origin", "url");
             boolean isSsh = isSshUrl(remoteUrl);
@@ -204,7 +224,9 @@ public class GitSyncServiceImpl implements GitSyncService {
             RepositoryState state = repository.getRepositoryState();
             // ALLOW PUSH if state is SAFE (Normal)
             if (state != RepositoryState.SAFE) {
-                return new GitSyncResult(false, "Push blocked: Repository is in state " + state + ". Please finalize your merge/rebase first.", false, Collections.emptyList(), false);
+                return new GitSyncResult(false,
+                        "Push blocked: Repository is in state " + state + ". Please finalize your merge/rebase first.", false,
+                        Collections.emptyList(), false);
             }
 
             git.push().setRemote("origin").setTransportConfigCallback(createTransportCallback(passphrase)).call();
@@ -212,11 +234,15 @@ public class GitSyncServiceImpl implements GitSyncService {
         } catch (Exception e) {
             boolean isSsh = false;
             try (Repository repository = openRepository()) {
-                if (repository != null) isSsh = isSshUrl(repository.getConfig().getString("remote", "origin", "url"));
-            } catch (Exception ignored) {}
+                if (repository != null)
+                    isSsh = isSshUrl(repository.getConfig().getString("remote", "origin", "url"));
+            } catch (Exception ignored) {
+            }
             boolean isAuth = isAuthenticationError(e) && isSsh;
-            if (isAuth) LOG.warn("Push authentication failed: " + e.getMessage());
-            else LOG.error("Push operation failed", e);
+            if (isAuth)
+                LOG.warn("Push authentication failed: " + e.getMessage());
+            else
+                LOG.error("Push operation failed", e);
             return new GitSyncResult(false, "Push error: " + e.getMessage(), false, Collections.emptyList(), isAuth);
         }
     }
@@ -224,7 +250,8 @@ public class GitSyncServiceImpl implements GitSyncService {
     @Override
     public GitSyncResult publish(String commitMessage, String passphrase, List<String> filePaths) {
         try (Repository repository = openRepository(); Git git = new Git(repository)) {
-            if (repository == null) return new GitSyncResult(false, "Git repository not found", false, Collections.emptyList(), false);
+            if (repository == null)
+                return new GitSyncResult(false, "Git repository not found", false, Collections.emptyList(), false);
 
             String remoteUrl = repository.getConfig().getString("remote", "origin", "url");
             boolean isSsh = isSshUrl(remoteUrl);
@@ -234,11 +261,13 @@ public class GitSyncServiceImpl implements GitSyncService {
 
             // 1. Add files (including resolved conflicts)
             Status status = git.status().call();
-            List<String> filesToAdd = new ArrayList<>(extractSignificantContentChanges(status, resolveWorkingPrefix(repository)));
+            List<String> filesToAdd = new ArrayList<>(
+                    extractSignificantContentChanges(status, resolveWorkingPrefix(repository)));
             filesToAdd.addAll(status.getConflicting());
 
             if (!filesToAdd.isEmpty()) {
-                for (String path : filesToAdd) git.add().addFilepattern(path).call();
+                for (String path : filesToAdd)
+                    git.add().addFilepattern(path).call();
             }
 
             // 2. Finalize Git State (Commit or Rebase)
@@ -250,14 +279,18 @@ public class GitSyncServiceImpl implements GitSyncService {
                         res = git.rebase().setOperation(RebaseCommand.Operation.SKIP).call();
                     }
                     if (res.getStatus() == RebaseResult.Status.STOPPED) {
-                        return new GitSyncResult(false, "Rebase stopped: conflicts in next commit. Resolve and click Publish again.", true, new ArrayList<>(git.status().call().getConflicting()), false);
+                        return new GitSyncResult(false,
+                                "Rebase stopped: conflicts in next commit. Resolve and click Publish again.", true,
+                                new ArrayList<>(git.status().call().getConflicting()), false);
                     }
                     state = repository.getRepositoryState();
                 } catch (Exception e) {
-                    return new GitSyncResult(false, "Failed to continue rebase: " + e.getMessage(), false, Collections.emptyList(), false);
+                    return new GitSyncResult(false, "Failed to continue rebase: " + e.getMessage(), false,
+                            Collections.emptyList(), false);
                 }
             } else if (state == RepositoryState.MERGING || !filesToAdd.isEmpty()) {
-                String msg = (commitMessage == null || commitMessage.isBlank()) ? editorConfig.sync().commitMessage().template() : commitMessage;
+                String msg = (commitMessage == null || commitMessage.isBlank()) ? editorConfig.sync().commitMessage().template()
+                        : commitMessage;
                 git.commit().setMessage(msg).call();
                 state = repository.getRepositoryState();
             }
@@ -268,40 +301,52 @@ public class GitSyncServiceImpl implements GitSyncService {
             if (behindCount > 0 && state == RepositoryState.SAFE) {
                 LOG.info("Performing auto-merge during publish due to remote changes.");
                 GitSyncResult mergeResult = sync(passphrase);
-                if (!mergeResult.success()) return mergeResult;
+                if (!mergeResult.success())
+                    return mergeResult;
                 state = repository.getRepositoryState();
             }
 
             // 4. Final Push
             if (state != RepositoryState.SAFE) {
-                return new GitSyncResult(true, "Partial resolution successful (State: " + state + "). Continue resolving/publishing.", false, Collections.emptyList(), false);
+                return new GitSyncResult(true,
+                        "Partial resolution successful (State: " + state + "). Continue resolving/publishing.", false,
+                        Collections.emptyList(), false);
             }
 
             return push(passphrase);
         } catch (Exception e) {
             boolean isSsh = false;
             try (Repository repository = openRepository()) {
-                if (repository != null) isSsh = isSshUrl(repository.getConfig().getString("remote", "origin", "url"));
-            } catch (Exception ignored) {}
+                if (repository != null)
+                    isSsh = isSshUrl(repository.getConfig().getString("remote", "origin", "url"));
+            } catch (Exception ignored) {
+            }
             boolean isAuth = isAuthenticationError(e) && isSsh;
-            if (isAuth) LOG.warn("Publish authentication failed: " + e.getMessage());
-            else LOG.error("Publishing operation failed", e);
+            if (isAuth)
+                LOG.warn("Publish authentication failed: " + e.getMessage());
+            else
+                LOG.error("Publishing operation failed", e);
             return new GitSyncResult(false, "Publish error: " + e.getMessage(), false, Collections.emptyList(), isAuth);
         }
     }
 
-    @Override public GitSyncResult publishAndSync(String commitMessage, String passphrase, List<String> filePaths) {
+    @Override
+    public GitSyncResult publishAndSync(String commitMessage, String passphrase, List<String> filePaths) {
         GitSyncResult publishResult = publish(commitMessage, passphrase, filePaths);
-        if (!publishResult.success()) return publishResult;
+        if (!publishResult.success())
+            return publishResult;
         return sync(passphrase);
     }
 
-    protected File resolveWorkingDirectory() { return rootDirectory; }
+    protected File resolveWorkingDirectory() {
+        return rootDirectory;
+    }
 
     private Repository openRepository() throws IOException {
         File workingDir = resolveWorkingDirectory();
         FileRepositoryBuilder builder = new FileRepositoryBuilder().readEnvironment().findGitDir(workingDir);
-        if (builder.getGitDir() == null) return null;
+        if (builder.getGitDir() == null)
+            return null;
         return builder.build();
     }
 
@@ -312,20 +357,26 @@ public class GitSyncServiceImpl implements GitSyncService {
     private String resolveWorkingPrefix(Repository repository) {
         Path rootPath = repository.getWorkTree().toPath().toAbsolutePath().normalize();
         Path currentPath = rootDirectory.toPath().toAbsolutePath().normalize();
-        if (currentPath.equals(rootPath)) return "";
+        if (currentPath.equals(rootPath))
+            return "";
         return rootPath.relativize(currentPath).toString().replace(File.separatorChar, '/') + "/";
     }
 
     private List<String> extractSignificantContentChanges(Status status, String prefix) {
-        return Stream.of(status.getUncommittedChanges(), status.getUntracked(), status.getAdded(), status.getChanged(), status.getRemoved())
+        return Stream
+                .of(status.getUncommittedChanges(), status.getUntracked(), status.getAdded(), status.getChanged(),
+                        status.getRemoved())
                 .flatMap(Set::stream).filter(path -> isSignificantContentFile(path, prefix)).distinct().toList();
     }
 
     private boolean isSignificantContentFile(String path, String prefix) {
-        if (path.startsWith(".git") || path.contains("/.git/")) return false;
-        if (!prefix.isEmpty() && !path.startsWith(prefix)) return false;
+        if (path.startsWith(".git") || path.contains("/.git/"))
+            return false;
+        if (!prefix.isEmpty() && !path.startsWith(prefix))
+            return false;
         String relativePath = prefix.isEmpty() ? path : (path.startsWith(prefix) ? path.substring(prefix.length()) : path);
-        if (relativePath.startsWith("/")) relativePath = relativePath.substring(1);
+        if (relativePath.startsWith("/"))
+            relativePath = relativePath.substring(1);
         return relativePath.startsWith(siteConfig.contentDir()) || relativePath.startsWith(siteConfig.publicDir()) ||
                 relativePath.startsWith(siteConfig.staticDir()) || relativePath.startsWith("posts/") ||
                 relativePath.startsWith("data/") || relativePath.startsWith("templates/") || relativePath.equals("roq.java");
@@ -333,7 +384,8 @@ public class GitSyncServiceImpl implements GitSyncService {
 
     private GitSyncResult handleFailedPull(PullResult result, Git git) throws Exception {
         Status status = git.status().call();
-        if (!status.getConflicting().isEmpty()) return new GitSyncResult(false, "Merge conflicts detected", true, new ArrayList<>(status.getConflicting()), false);
+        if (!status.getConflicting().isEmpty())
+            return new GitSyncResult(false, "Merge conflicts detected", true, new ArrayList<>(status.getConflicting()), false);
         if (result.getMergeResult() != null) {
             org.eclipse.jgit.api.MergeResult mergeResult = result.getMergeResult();
             if (mergeResult.getMergeStatus() == org.eclipse.jgit.api.MergeResult.MergeStatus.FAILED) {
@@ -342,7 +394,8 @@ public class GitSyncServiceImpl implements GitSyncService {
                     return new GitSyncResult(false, "Sync failed: local changes conflict.", false, failing, false);
                 }
             }
-            return new GitSyncResult(false, "Sync failed: " + mergeResult.getMergeStatus(), false, Collections.emptyList(), false);
+            return new GitSyncResult(false, "Sync failed: " + mergeResult.getMergeStatus(), false, Collections.emptyList(),
+                    false);
         }
         if (!status.isClean()) {
             List<String> dirty = new ArrayList<>(status.getModified());
@@ -353,19 +406,24 @@ public class GitSyncServiceImpl implements GitSyncService {
     }
 
     private boolean isSshUrl(String url) {
-        if (url == null) return false;
+        if (url == null)
+            return false;
         return url.startsWith("ssh://") || url.startsWith("git@") || SCP_LIKE_SSH_URL.matcher(url).matches();
     }
 
     private boolean isAuthenticationError(Throwable throwable) {
         Throwable current = throwable;
         while (current != null) {
-            if (current instanceof java.io.StreamCorruptedException || current instanceof javax.security.auth.login.FailedLoginException) return true;
+            if (current instanceof java.io.StreamCorruptedException
+                    || current instanceof javax.security.auth.login.FailedLoginException)
+                return true;
             String msg = current.getMessage();
             if (msg != null) {
                 String lowerMsg = msg.toLowerCase();
                 if (lowerMsg.contains("auth") || lowerMsg.contains("passphrase") || lowerMsg.contains("no keys") ||
-                    lowerMsg.contains("mismatched") || lowerMsg.contains("corrupted") || lowerMsg.contains("cannot log in") || lowerMsg.contains("publickey") || lowerMsg.contains("identity")) return true;
+                        lowerMsg.contains("mismatched") || lowerMsg.contains("corrupted") || lowerMsg.contains("cannot log in")
+                        || lowerMsg.contains("publickey") || lowerMsg.contains("identity"))
+                    return true;
             }
             current = current.getCause();
         }
@@ -381,9 +439,19 @@ public class GitSyncServiceImpl implements GitSyncService {
                         .setSshDirectory(new File(FS.DETECTED.userHome(), ".ssh"));
                 if (passphrase != null && !passphrase.isEmpty()) {
                     builder.setKeyPasswordProvider(cp -> new KeyPasswordProvider() {
-                        @Override public char[] getPassphrase(URIish uri, int attempt) { return passphrase.toCharArray(); }
-                        @Override public boolean keyLoaded(URIish uri, int attempt, Exception err) { return false; }
-                        @Override public void setAttempts(int attempts) {}
+                        @Override
+                        public char[] getPassphrase(URIish uri, int attempt) {
+                            return passphrase.toCharArray();
+                        }
+
+                        @Override
+                        public boolean keyLoaded(URIish uri, int attempt, Exception err) {
+                            return false;
+                        }
+
+                        @Override
+                        public void setAttempts(int attempts) {
+                        }
                     });
                 }
                 sshTransport.setSshSessionFactory(builder.build(null));
