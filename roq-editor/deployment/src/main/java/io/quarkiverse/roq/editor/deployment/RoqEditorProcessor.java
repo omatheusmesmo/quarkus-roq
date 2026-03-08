@@ -26,6 +26,7 @@ import io.quarkus.deployment.builditem.LaunchModeBuildItem;
 import io.quarkus.deployment.builditem.ServiceStartBuildItem;
 import io.quarkus.deployment.console.ConsoleCommand;
 import io.quarkus.deployment.console.ConsoleStateManager;
+import io.quarkus.deployment.logging.LogCleanupFilterBuildItem;
 import io.quarkus.deployment.pkg.builditem.CurateOutcomeBuildItem;
 import io.quarkus.dev.spi.DevModeType;
 import io.quarkus.devui.spi.JsonRPCProvidersBuildItem;
@@ -45,6 +46,17 @@ public class RoqEditorProcessor {
     @BuildStep
     FeatureBuildItem feature() {
         return new FeatureBuildItem(FEATURE);
+    }
+
+    @BuildStep
+    List<LogCleanupFilterBuildItem> cleanupLoudJGitLogs() {
+        return List.of(
+                new LogCleanupFilterBuildItem("org.eclipse.jgit.internal.transport.sshd.CachingKeyPairProvider",
+                        "Mismatched private key check values"),
+                new LogCleanupFilterBuildItem("org.apache.sshd.common.config.keys.loader.openssh.OpenSSHKeyPairResourceParser",
+                        "readPrivateKeys"),
+                new LogCleanupFilterBuildItem("org.apache.sshd.common.config.keys.FilePasswordProvider",
+                        "decode"));
     }
 
     @BuildStep(onlyIf = IsDevelopment.class)
@@ -148,9 +160,15 @@ public class RoqEditorProcessor {
             return null;
         }
 
-        // Get the project root directory from the application model
-        Path projectRoot = curateOutcomeBuildItem.getApplicationModel().getAppArtifact().getWorkspaceModule().getModuleDir()
-                .toPath();
+        // Get the project root directory from the application model safely
+        Path projectRoot;
+        if (curateOutcomeBuildItem.getApplicationModel().getAppArtifact().getWorkspaceModule() != null) {
+            projectRoot = curateOutcomeBuildItem.getApplicationModel().getAppArtifact().getWorkspaceModule().getModuleDir()
+                    .toPath();
+        } else {
+            projectRoot = Path.of(".").toAbsolutePath();
+        }
+
         GitSyncService gitService = new GitSyncServiceImpl(editorConfig, siteConfig, projectRoot.toFile());
 
         BuildTimeActionBuildItem actions = new BuildTimeActionBuildItem();
