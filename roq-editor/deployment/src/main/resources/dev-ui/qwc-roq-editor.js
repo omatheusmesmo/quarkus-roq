@@ -179,7 +179,6 @@ export class QwcRoqEditor extends LitElement {
                 if (updatedItem && JSON.stringify(this._selectedPage) !== JSON.stringify(updatedItem)) {
                     // Update selected post/page with fresh URL
                     this._selectedPage = updatedItem;
-                    console.log('new url detected for preview', updatedItem.url);
                 }
             }
 
@@ -321,7 +320,6 @@ export class QwcRoqEditor extends LitElement {
                         console.error(result.errorMessage);
                         return;
                     }
-                    console.log('result', result);
                     this._pendingRefreshPages = true;
                     if (collectionId) {
                         this._posts = [result.page].concat(this._posts);

@@ -37,7 +37,6 @@ export class SyncManager {
             if (autoSyncConfig?.enabled && status.behind > 0) {
                 const syncIntervalMs = (autoSyncConfig['interval-seconds'] || 60) * 1000;
                 if (now - this.lastAutoSyncTime >= syncIntervalMs) {
-                    console.log("[SyncManager] Triggering auto-sync...");
                     try {
                         // For auto-sync, we only proceed if we have a passphrase for SSH or it's not SSH
                         if (!status.isSsh || this.passphrase) {
@@ -55,7 +54,6 @@ export class SyncManager {
             if (autoPublishConfig?.enabled && status.hasUnpublished) {
                 const publishIntervalMs = (autoPublishConfig['interval-seconds'] || 300) * 1000;
                 if (now - this.lastAutoPublishTime >= publishIntervalMs) {
-                    console.log("[SyncManager] Triggering auto-publish...");
                     try {
                         // For auto-publish, we only proceed if we have a passphrase for SSH or it's not SSH
                         if (!status.isSsh || this.passphrase) {
