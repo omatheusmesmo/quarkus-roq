@@ -48,8 +48,9 @@ export class SyncControls extends LitElement {
         const hasUnpublished = this.status?.hasUnpublished;
         const ahead = this.status?.ahead > 0;
         const behind = this.status?.behind > 0;
+        const hasConflicts = this.status?.hasConflicts;
 
-        const canPublish = (!statusKnown || hasUnpublished || ahead) && !this.publishing && !this.syncing;
+        const canPublish = (!statusKnown || hasUnpublished || ahead || hasConflicts) && !this.publishing && !this.syncing;
         const canSync = (!statusKnown || behind || !hasUnpublished) && !this.syncing && !this.publishing;
 
         return html`
@@ -65,8 +66,8 @@ export class SyncControls extends LitElement {
                 theme="primary small"
                 ?disabled="${!canPublish}"
                 @click="${this._onPublishClick}">
-                <vaadin-icon icon="font-awesome-solid:cloud-arrow-up" slot="prefix"></vaadin-icon>
-                ${this.publishing ? 'Publishing...' : 'Publish'}
+                <vaadin-icon icon="${hasConflicts ? 'font-awesome-solid:check-double' : 'font-awesome-solid:cloud-arrow-up'}" slot="prefix"></vaadin-icon>
+                ${this.publishing ? 'Publishing...' : (hasConflicts ? 'Resolve & Publish' : 'Publish')}
             </vaadin-button>
         `;
     }

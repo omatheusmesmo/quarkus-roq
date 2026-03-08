@@ -202,7 +202,8 @@ export class QwcRoqEditor extends LitElement {
                 <div class="sync-header">
                     <qwc-sync-status-bar
                         .status="${this._syncStatus}"
-                        .syncing="${this._syncing || this._publishing}">
+                        .syncing="${this._syncing || this._publishing}"
+                        @show-conflicts="${(e) => showConflictDialog(e.detail.files)}">
                     </qwc-sync-status-bar>
                     <qwc-sync-controls
                         .status="${this._syncStatus}"

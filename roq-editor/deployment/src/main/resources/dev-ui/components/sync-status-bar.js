@@ -24,6 +24,10 @@ export class SyncStatusBar extends LitElement {
             background: var(--lumo-contrast-10pct);
         }
 
+        :host([has-conflicts]) {
+            cursor: pointer;
+        }
+
         .status-icon {
             display: flex;
             align-items: center;
@@ -108,6 +112,26 @@ export class SyncStatusBar extends LitElement {
         this.syncing = false;
     }
 
+    updated(changedProperties) {
+        if (changedProperties.has('status')) {
+            if (this.status?.hasConflicts) {
+                this.setAttribute('has-conflicts', '');
+            } else {
+                this.removeAttribute('has-conflicts');
+            }
+        }
+    }
+
+    _onStatusClick() {
+        if (this.status?.hasConflicts) {
+            this.dispatchEvent(new CustomEvent('show-conflicts', {
+                detail: { files: this.status.conflictFiles },
+                bubbles: true,
+                composed: true
+            }));
+        }
+    }
+
     _renderStatus() {
         if (this.syncing) {
             return html`<vaadin-icon class="status-icon syncing pulse" icon="font-awesome-solid:rotate"></vaadin-icon>`;
@@ -151,9 +175,6 @@ export class SyncStatusBar extends LitElement {
         if (this.syncing) return 'Syncing...';
         if (!this.status) return 'Checking status...';
         
-        const isDirty = this.status.hasUnpublished || this.status.ahead > 0;
-        const isBehind = this.status.behind > 0 || this.status.hasRemoteChanges;
-
         // Blockers first
         if (this.status.authFailed && this.status.isSsh) return 'SSH Authentication Required';
         if (this.status.hasConflicts) return 'Git Conflicts Detected';
@@ -179,30 +200,32 @@ export class SyncStatusBar extends LitElement {
         const isSafe = !repoState || repoState === 'SAFE';
 
         return html`
-            <div class="status-icon ${this._getStatusClass()}">
-                ${this._renderStatus()}
-            </div>
-            
-            <span class="status-text">${this._getStatusText()}</span>
-            
-            ${!isSafe ? html`<span class="state-tag">${repoState.replace('_', ' ')}</span>` : ''}
-            
-            ${this.status?.branch && this.status.branch !== 'sync-disabled' ? html`
-                <div class="branch-info">
-                    <vaadin-icon icon="font-awesome-solid:code-branch" style="width: 12px; color: var(--lumo-contrast-50pct)"></vaadin-icon>
-                    <span class="branch-name">${this.status.branch}</span>
-                    ${this.status.ahead > 0 || this.status.behind > 0 ? html`
-                        <div class="ahead-behind">
-                            ${this.status.ahead > 0 ? html`
-                                <span class="ahead" title="${this.status.ahead} commits ahead">↑${this.status.ahead}</span>
-                            ` : ''}
-                            ${this.status.behind > 0 ? html`
-                                <span class="behind" title="${this.status.behind} commits behind">↓${this.status.behind}</span>
-                            ` : ''}
-                        </div>
-                    ` : ''}
+            <div @click="${this._onStatusClick}" style="display:contents">
+                <div class="status-icon ${this._getStatusClass()}">
+                    ${this._renderStatus()}
                 </div>
-            ` : ''}
+                
+                <span class="status-text">${this._getStatusText()}</span>
+                
+                ${!isSafe ? html`<span class="state-tag">${repoState.replace('_', ' ')}</span>` : ''}
+                
+                ${this.status?.branch && this.status.branch !== 'sync-disabled' ? html`
+                    <div class="branch-info">
+                        <vaadin-icon icon="font-awesome-solid:code-branch" style="width: 12px; color: var(--lumo-contrast-50pct)"></vaadin-icon>
+                        <span class="branch-name">${this.status.branch}</span>
+                        ${this.status.ahead > 0 || this.status.behind > 0 ? html`
+                            <div class="ahead-behind">
+                                ${this.status.ahead > 0 ? html`
+                                    <span class="ahead" title="${this.status.ahead} commits ahead">↑${this.status.ahead}</span>
+                                ` : ''}
+                                ${this.status.behind > 0 ? html`
+                                    <span class="behind" title="${this.status.behind} commits behind">↓${this.status.behind}</span>
+                                ` : ''}
+                            </div>
+                        ` : ''}
+                    </div>
+                ` : ''}
+            </div>
         `;
     }
 
