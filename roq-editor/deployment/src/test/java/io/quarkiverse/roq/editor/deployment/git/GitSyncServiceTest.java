@@ -267,14 +267,12 @@ class GitSyncServiceTest {
                 .setDirectory(otherPersonDir.toFile())
                 .setBranch(branch)
                 .call()) {
-            // REMOTE: Mudar linha 1
             Files.writeString(otherPersonDir.resolve(fileName), "REMOTE CHANGE\ninitial content\n");
             otherGit.add().addFilepattern(fileName).call();
             otherGit.commit().setMessage("Remote update").call();
             otherGit.push().call();
         }
 
-        // LOCAL: Mudar linha 1 para outra coisa (sem commitar)
         Files.writeString(localDirectory.resolve(fileName), "LOCAL CHANGE\ninitial content\n");
 
         GitSyncResult result = gitSyncService.publish("Local update", null, null);
@@ -336,8 +334,7 @@ class GitSyncServiceTest {
 
         try {
             localRepository.pull().setRebase(true).call();
-        } catch (Exception e) {
-            // Expected conflict
+        } catch (Exception ignored) {
         }
 
         Files.writeString(localDirectory.resolve(fileName), "remote content\n");
