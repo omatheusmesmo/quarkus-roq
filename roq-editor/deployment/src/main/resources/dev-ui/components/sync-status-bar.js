@@ -152,11 +152,15 @@ export class SyncStatusBar extends LitElement {
         if (this.status.authFailed && this.status.isSsh) return 'SSH Authentication Required';
         if (this.status.hasConflicts) return 'Git Conflicts Detected';
         
+        // Branch state
+        if (this.status.ahead > 0 && this.status.behind > 0) return 'Branch Diverged';
+        
         // Remote priority
         if (this.status.behind > 0 || this.status.hasRemoteChanges) return 'Remote changes detected';
         
         // Local attention
-        if (this.status.ahead > 0 || this.status.hasUnpublished) return 'Content Not Published';
+        if (this.status.hasUnpublished) return 'Content Not Published';
+        if (this.status.ahead > 0) return 'Local commits pending';
         
         // Normal
         if (this.status.upToDate) return 'Content Up to date';
