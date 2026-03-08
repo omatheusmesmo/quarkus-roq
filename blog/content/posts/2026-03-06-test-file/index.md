@@ -11,6 +11,6 @@ Hello from remote repository !!!@!!
 &nbsp;
 
 @@@#45 786#   
-[remote change ²]  
+[remote change ²]  
 
 &nbsp;
