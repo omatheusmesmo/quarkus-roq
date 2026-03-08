@@ -13,18 +13,62 @@ export class SyncManager {
     start() {
         if (this.intervalId) return;
         
-        const autoSyncConfig = this.syncConfig?.['auto-sync'];
-        const intervalMs = (autoSyncConfig?.['interval-seconds'] || 10) * 1000;
+        // Polling interval for status updates (default 10s)
+        const pollingIntervalMs = 10 * 1000;
         
+        this.lastAutoSyncTime = Date.now();
+        this.lastAutoPublishTime = Date.now();
+
         // First refresh should NOT skip fetch to detect auth needs immediately
         this.refreshStatus(false);
         
-        this.intervalId = setInterval(() => {
+        this.intervalId = setInterval(async () => {
             this.pollingCount++;
-            // Perform a full fetch every 6 cycles (approx 60s if interval is 10s)
+            // Perform a full fetch every 6 cycles (approx 60s)
             const skipFetch = (this.pollingCount % 6 !== 0);
-            this.refreshStatus(skipFetch);
-        }, intervalMs); 
+            const status = await this.refreshStatus(skipFetch);
+            
+            if (!status || status.hasConflicts) return;
+
+            const now = Date.now();
+
+            // 1. Auto-Sync Logic
+            const autoSyncConfig = this.syncConfig?.['auto-sync'];
+            if (autoSyncConfig?.enabled && status.behind > 0) {
+                const syncIntervalMs = (autoSyncConfig['interval-seconds'] || 60) * 1000;
+                if (now - this.lastAutoSyncTime >= syncIntervalMs) {
+                    console.log("[SyncManager] Triggering auto-sync...");
+                    try {
+                        // For auto-sync, we only proceed if we have a passphrase for SSH or it's not SSH
+                        if (!status.isSsh || this.passphrase) {
+                            await this.manualSync();
+                            this.lastAutoSyncTime = now;
+                        }
+                    } catch (e) {
+                        console.warn("[SyncManager] Auto-sync failed:", e.message);
+                    }
+                }
+            }
+
+            // 2. Auto-Publish Logic
+            const autoPublishConfig = this.syncConfig?.['auto-publish'];
+            if (autoPublishConfig?.enabled && status.hasUnpublished) {
+                const publishIntervalMs = (autoPublishConfig['interval-seconds'] || 300) * 1000;
+                if (now - this.lastAutoPublishTime >= publishIntervalMs) {
+                    console.log("[SyncManager] Triggering auto-publish...");
+                    try {
+                        // For auto-publish, we only proceed if we have a passphrase for SSH or it's not SSH
+                        if (!status.isSsh || this.passphrase) {
+                            const message = this.syncConfig?.['commit-message']?.template || "Auto-update via Roq Editor";
+                            await this.manualPublish(message, status.pendingFiles || []);
+                            this.lastAutoPublishTime = now;
+                        }
+                    } catch (e) {
+                        console.warn("[SyncManager] Auto-publish failed:", e.message);
+                    }
+                }
+            }
+        }, pollingIntervalMs); 
     }
 
     stop() {
@@ -49,8 +93,10 @@ export class SyncManager {
             // Only prompt if backend explicitly says authFailed AND it's an SSH repo
             if (statusInfo.authFailed && statusInfo.isSsh) {
                 console.warn("[SyncManager] Auth error detected for SSH repo, clearing passphrase and prompting");
+                const alreadyTried = !!this.passphrase;
                 this.passphrase = null;
-                this.onPassphraseRequired();
+                // Only show error if we had a passphrase and it failed
+                this.onPassphraseRequired(alreadyTried ? "SSH authentication failed. Please check your passphrase." : null);
             }
             
             this.onStatusChange(statusInfo);
@@ -75,23 +121,26 @@ export class SyncManager {
     async _withPassphrase(operation) {
         // Proactive check: Only for SSH
         if (!this.passphrase && this.status?.authFailed && this.status?.isSsh) {
-            this.onPassphraseRequired();
+            this.onPassphraseRequired(null);
             throw new Error("AUTH_REQUIRED: SSH passphrase required");
         }
         try {
             const result = await operation(this.passphrase);
             
             if (result?.authFailed && this.status?.isSsh) {
+                const hadPassphrase = !!this.passphrase;
                 this.passphrase = null;
-                this.onPassphraseRequired();
                 const errorMsg = result?.message || "Authentication failed";
+                this.onPassphraseRequired(hadPassphrase ? errorMsg.replace("AUTH_FAILED:", "").replace("AUTH_REQUIRED:", "") : null);
                 throw new Error(errorMsg.startsWith("AUTH_") ? errorMsg : `AUTH_FAILED:${errorMsg}`);
             }
             return result;
         } catch (error) {
             if (this._isAuthError(error)) {
+                const hadPassphrase = !!this.passphrase;
                 this.passphrase = null;
-                this.onPassphraseRequired();
+                const msg = typeof error === 'string' ? error : error.message;
+                this.onPassphraseRequired(hadPassphrase ? msg.replace("AUTH_FAILED:", "").replace("AUTH_REQUIRED:", "") : null);
             }
             throw error;
         }

@@ -185,14 +185,14 @@ public class RoqEditorProcessor {
         }).build();
 
         actions.actionBuilder().methodName("publishContent").function(parameters -> {
-            String commitMessage = String.valueOf(parameters.get("message"));
+            String commitMessage = parseString(parameters.get("message"));
             String passphrase = parseString(parameters.get("passphrase"));
             List<String> filePaths = extractList(parameters.get("filePaths"));
             return CompletableFuture.supplyAsync(() -> gitService.publish(commitMessage, passphrase, filePaths));
         }).build();
 
         actions.actionBuilder().methodName("publishAndSync").function(parameters -> {
-            String commitMessage = String.valueOf(parameters.get("message"));
+            String commitMessage = parseString(parameters.get("message"));
             String passphrase = parseString(parameters.get("passphrase"));
             List<String> filePaths = extractList(parameters.get("filePaths"));
             return CompletableFuture.supplyAsync(() -> gitService.publishAndSync(commitMessage, passphrase, filePaths));
