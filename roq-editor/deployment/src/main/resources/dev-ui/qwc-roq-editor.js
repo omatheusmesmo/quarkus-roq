@@ -125,7 +125,11 @@ export class QwcRoqEditor extends LitElement {
                 this.gitJsonRpc,
                 (status) => { this._syncStatus = status; },
                 config.sync,
-                (errorMsg) => this._showPassphraseDialog(errorMsg)
+                {
+                    onPassphraseRequired: (errorMsg) => this._showPassphraseDialog(errorMsg),
+                    onNotification: (msg, type) => showNotification(msg, type),
+                    onConflict: (files) => showConflictDialog(files)
+                }
             );
             this._syncManager.start();
         }
@@ -326,11 +330,11 @@ export class QwcRoqEditor extends LitElement {
                     } else {
                         this._pages = [result.page].concat(this._pages);
                     }
-                    if (this._syncManager) {
-                        this._syncManager.refreshStatus(true);
-                    }
-                    // Optimistic update
-                    this._optimisticGitDirty();
+                    
+                    // Centralized Git handling
+                    this._syncManager?.markAsDirty();
+                    this._syncManager?.refreshStatus(true);
+
                     this._onPageOpen({detail: {page: result.page, content: result.content}});
                 }).catch(error => {
                     showNotification('Error creating page: ' + error.message);
@@ -390,11 +394,11 @@ export class QwcRoqEditor extends LitElement {
             if (this._selectedPage?.path === page.path) {
                 this._selectedPage = updated;
             }
-            if (this._syncManager) {
-                this._syncManager.refreshStatus(true);
-            }
-            // Optimistic update
-            this._optimisticGitDirty();
+            
+            // Centralized Git handling
+            this._syncManager?.markAsDirty();
+            this._syncManager?.refreshStatus(true);
+
             this._pendingRefreshPages = true;
         }).catch(error => {
             showNotification('Error syncing page path: ' + error.message);
@@ -509,16 +513,13 @@ export class QwcRoqEditor extends LitElement {
 
                 this._pendingRefreshPages = "background";
 
-                if (this._syncManager) {
-                    this._syncManager.refreshStatus(true); // skip fetch, just check local status
-                }
+                // Centralized Git handling
+                this._syncManager?.markAsDirty();
+                this._syncManager?.refreshStatus(true);
 
                 if (target && target.markSaved) {
                     target.markSaved();
                 }
-
-                // Optimistic update: mark as dirty immediately
-                this._optimisticGitDirty();
             }
         }).catch(error => {
             if (target && target.markSaveError) {
@@ -551,11 +552,10 @@ export class QwcRoqEditor extends LitElement {
                 } else {
                     this._pages = updated;
                 }
-                if (this._syncManager) {
-                    this._syncManager.refreshStatus(true);
-                }
-                // Optimistic update
-                this._optimisticGitDirty();
+                
+                // Centralized Git handling
+                this._syncManager?.markAsDirty();
+                this._syncManager?.refreshStatus(true);
 
             } else {
                 showNotification('Error deleting page: ' + (result || 'Unknown error'));
@@ -566,16 +566,6 @@ export class QwcRoqEditor extends LitElement {
         });
     }
 
-    _optimisticGitDirty() {
-        if (this._syncStatus && !this._syncStatus.hasUnpublished) {
-            this._syncStatus = {
-                ...this._syncStatus,
-                hasUnpublished: true,
-                upToDate: false
-            };
-        }
-    }
-
     _showPassphraseDialog(errorMsg) {
         this.shadowRoot?.querySelector('passphrase-dialog')?.show(errorMsg);
     }
@@ -583,7 +573,6 @@ export class QwcRoqEditor extends LitElement {
     _onPassphraseConfirmed(e) {
         const { passphrase } = e.detail;
         this._syncManager.setPassphrase(passphrase);
-        // Retry the pending operation, if any
         if (this._pendingSyncOperation) {
             const operation = this._pendingSyncOperation;
             this._pendingSyncOperation = null;
@@ -596,17 +585,12 @@ export class QwcRoqEditor extends LitElement {
         this._pendingSyncOperation = () => this._onSyncRequested();
         try {
             const result = await this._syncManager.manualSync();
-            if (!result?.passphraseRequired) this._pendingSyncOperation = null;
-            if (result?.success) {
+            if (!result?.passphraseRequired) {
                 this._pendingSyncOperation = null;
-                showNotification('Content synchronized successfully', 'success');
-                this._pendingRefreshPages = true;
-                this._refreshPageInfo();
-            } else if (result?.hasConflicts) {
-                this._pendingSyncOperation = null;
-                await showConflictDialog(result.conflictFiles);
-            } else if (!result?.passphraseRequired) {
-                showNotification(result?.message, 'error');
+                if (result?.success) {
+                    this._pendingRefreshPages = true;
+                    this._refreshPageInfo();
+                }
             }
         } catch (error) {
             showNotification('Sync failed: ' + error.message, 'error');
@@ -616,15 +600,13 @@ export class QwcRoqEditor extends LitElement {
     }
 
     async _onPublishRequested(event) {
-        // Get fresh status to ensure pendingFiles is up-to-date.
         const freshStatus = await this._syncManager?.refreshStatus();
         const files = freshStatus?.pendingFiles ?? [];
 
-        // If multiple files, let the user choose which ones to include.
         let selectedFiles = files;
         if (files.length > 1) {
             selectedFiles = await showFileSelector(files);
-            if (selectedFiles === null) return; // cancelled
+            if (selectedFiles === null) return;
         }
 
         const needsCommit = selectedFiles.length > 0 || freshStatus?.repositoryState === 'MERGING';
@@ -638,12 +620,8 @@ export class QwcRoqEditor extends LitElement {
         this._pendingSyncOperation = () => this._onPublishRequested(event);
         try {
             const result = await this._syncManager.manualPublish(message, selectedFiles);
-            if (!result?.passphraseRequired) this._pendingSyncOperation = null;
-            if (result?.success) {
+            if (!result?.passphraseRequired) {
                 this._pendingSyncOperation = null;
-                showNotification('Content published successfully', 'success');
-            } else if (!result?.passphraseRequired) {
-                showNotification(result?.message, 'error');
             }
         } catch (error) {
             showNotification('Publish failed: ' + error.message, 'error');

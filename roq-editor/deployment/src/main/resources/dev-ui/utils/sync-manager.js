@@ -1,9 +1,25 @@
+/**
+ * Orchestrator for Git synchronization background tasks and authentication management.
+ * Handles polling for repository status, automatic sync/publish, and SSH passphrase flows.
+ */
 export class SyncManager {
-    constructor(jsonRpc, onStatusChange, syncConfig, onPassphraseRequired) {
+    /**
+     * @param {Object} jsonRpc - The JSON-RPC service for Git operations
+     * @param {Function} onStatusChange - Callback fired when Git status is updated
+     * @param {Object} syncConfig - Git sync configuration from RoqEditorConfig
+     * @param {Object} callbacks - Collection of UI callbacks
+     * @param {Function} callbacks.onPassphraseRequired - Trigger the SSH passphrase dialog
+     * @param {Function} callbacks.onNotification - Show a UI notification (message, type)
+     * @param {Function} callbacks.onConflict - Show the conflict resolution dialog (files)
+     */
+    constructor(jsonRpc, onStatusChange, syncConfig, callbacks) {
         this.jsonRpc = jsonRpc;
         this.onStatusChange = onStatusChange;
         this.syncConfig = syncConfig;
-        this.onPassphraseRequired = onPassphraseRequired;
+        this.onPassphraseRequired = callbacks.onPassphraseRequired;
+        this.onNotification = callbacks.onNotification;
+        this.onConflict = callbacks.onConflict;
+        
         this.status = null;
         this.passphrase = null;
         this.authError = false; 
@@ -11,27 +27,26 @@ export class SyncManager {
         this.pollingCount = 0;
     }
 
+    /**
+     * Starts the background polling and automation timers.
+     * Status updates occur every 10 seconds. Full network fetches are performed periodically.
+     */
     start() {
         if (this.intervalId) return;
         
-        // Polling interval for status updates (default 10s)
         const pollingIntervalMs = 10 * 1000;
         
         this.lastAutoSyncTime = Date.now();
         this.lastAutoPublishTime = Date.now();
 
-        // First refresh should NOT skip fetch to detect auth needs immediately
         this.refreshStatus(false);
         
         this.intervalId = setInterval(async () => {
-            // Early return if auth is currently failing/required and we don't have a passphrase to try.
-            // This stops polling backend when we are blocked by SSH.
             if (this.status?.authFailed && !this.passphrase) {
                 return;
             }
 
             this.pollingCount++;
-            // Perform a full fetch every 6 cycles (approx 60s)
             const skipFetch = (this.pollingCount % 6 !== 0);
             const status = await this.refreshStatus(skipFetch);
             
@@ -39,13 +54,11 @@ export class SyncManager {
 
             const now = Date.now();
 
-            // 1. Auto-Sync Logic
             const autoSyncConfig = this.syncConfig?.['auto-sync'];
             if (autoSyncConfig?.enabled === true && status.behind > 0) {
                 const syncIntervalMs = (autoSyncConfig['interval-seconds'] || 60) * 1000;
                 if (now - this.lastAutoSyncTime >= syncIntervalMs) {
                     try {
-                        // For auto-sync, we only proceed if we have a passphrase for SSH or it's not SSH
                         if (!status.isSsh || this.passphrase) {
                             await this.manualSync();
                             this.lastAutoSyncTime = now;
@@ -56,13 +69,11 @@ export class SyncManager {
                 }
             }
 
-            // 2. Auto-Publish Logic
             const autoPublishConfig = this.syncConfig?.['auto-publish'];
             if (autoPublishConfig?.enabled === true && status.hasUnpublished) {
                 const publishIntervalMs = (autoPublishConfig['interval-seconds'] || 300) * 1000;
                 if (now - this.lastAutoPublishTime >= publishIntervalMs) {
                     try {
-                        // For auto-publish, we only proceed if we have a passphrase for SSH or it's not SSH
                         if (!status.isSsh || this.passphrase) {
                             const message = this.syncConfig?.['commit-message']?.template || "Auto-update via Roq Editor";
                             await this.manualPublish(message, status.pendingFiles || []);
@@ -76,6 +87,9 @@ export class SyncManager {
         }, pollingIntervalMs); 
     }
 
+    /**
+     * Stops background polling and clears all timers.
+     */
     stop() {
         if (this.intervalId) {
             clearInterval(this.intervalId);
@@ -83,6 +97,26 @@ export class SyncManager {
         }
     }
 
+    /**
+     * Optimistically marks the current status as dirty (content not published).
+     * Used after local file operations like create, save, or delete.
+     */
+    markAsDirty() {
+        if (this.status && !this.status.hasUnpublished) {
+            this.status = {
+                ...this.status,
+                hasUnpublished: true,
+                upToDate: false
+            };
+            this.onStatusChange(this.status);
+        }
+    }
+
+    /**
+     * Refreshes the Git repository status from the backend.
+     * @param {boolean} skipFetch - If true, only check local branch tracking without network fetch
+     * @returns {Promise<Object>} The updated status information
+     */
     async refreshStatus(skipFetch = true) {
         try {
             const response = await this.jsonRpc.getSyncStatus({ 
@@ -94,7 +128,6 @@ export class SyncManager {
 
             this.status = statusInfo;
             
-            // Handle SSH Auth Flow
             if (statusInfo.authFailed && statusInfo.isSsh) {
                 const isNewFailure = !!this.passphrase;
                 if (isNewFailure) {
@@ -103,13 +136,9 @@ export class SyncManager {
                     this.passphrase = null;
                     this.onPassphraseRequired("SSH authentication failed. Please check your passphrase.");
                 } else if (!this.authError) {
-                    // First time or error was cleared by user typing, but still authFailed (likely initial prompt)
                     this.onPassphraseRequired(null);
                 }
-                // If this.authError is already true and passphrase is null (subsequent polling), 
-                // we do NOTHING. This preserves the error message in the open dialog.
             } else if (!statusInfo.authFailed) {
-                // Success! Clear error state
                 this.authError = false;
             }
             
@@ -120,21 +149,35 @@ export class SyncManager {
         }
     }
 
+    /**
+     * Sets the SSH passphrase and triggers an immediate refresh to validate it.
+     * @param {string} passphrase - The SSH passphrase
+     */
     setPassphrase(passphrase) {
         this.passphrase = passphrase;
-        this.authError = false; // Reset error state on new attempt
-        // Immediate full refresh to validate the new passphrase
+        this.authError = false;
         this.refreshStatus(false);
     }
 
+    /**
+     * Internal check to identify authentication-related errors.
+     * @param {any} errorOrMsg - Error object or message string
+     * @returns {boolean}
+     * @private
+     */
     _isAuthError(errorOrMsg) {
         const msg = typeof errorOrMsg === 'string' ? errorOrMsg : (errorOrMsg?.message || "");
-        // STRICT CHECK: Only trigger for our custom prefixes
         return msg.includes("AUTH_FAILED:") || msg.includes("AUTH_REQUIRED:");
     }
 
+    /**
+     * Wrapper for Git operations that require SSH authentication.
+     * Handles automatic passphrase prompting and error reporting.
+     * @param {Function} operation - The function to execute (receives passphrase)
+     * @returns {Promise<any>} Result of the operation
+     * @private
+     */
     async _withPassphrase(operation) {
-        // Proactive check: Only for SSH
         if (!this.passphrase && this.status?.authFailed && this.status?.isSsh) {
             this.onPassphraseRequired(null);
             throw new Error("AUTH_REQUIRED: SSH passphrase required");
@@ -161,27 +204,61 @@ export class SyncManager {
         }
     }
 
+    /**
+     * Centralized handler for Git operation results.
+     * Triggers notifications, dialogs, and status refreshes based on the result.
+     * 
+     * @param {Object} result - The result from the Git operation
+     * @param {string} successMessage - Message to show on success
+     * @returns {Object} The original result
+     * @private
+     */
+    async _handleOperationResult(result, successMessage) {
+        if (result?.success) {
+            this.onNotification(successMessage, 'success');
+            await this.refreshStatus(true);
+        } else if (result?.hasConflicts) {
+            await this.onConflict(result.conflictFiles);
+        } else if (result && !result.passphraseRequired) {
+            this.onNotification(result.message || "Operation failed", 'error');
+        }
+        return result;
+    }
+
+    /**
+     * Manually triggers a Git Sync (pull).
+     * @returns {Promise<Object>} Result of the operation
+     */
     async manualSync() {
         const result = await this._withPassphrase(
             (pass) => this.jsonRpc.syncContent({ passphrase: pass }).then(r => r.result)
         );
-        await this.refreshStatus(true);
-        return result;
+        return this._handleOperationResult(result, 'Content synchronized successfully');
     }
 
+    /**
+     * Manually triggers a Git Publish (commit + push).
+     * @param {string} message - The commit message
+     * @param {string[]} filePaths - List of files to stage and commit
+     * @returns {Promise<Object>} Result of the operation
+     */
     async manualPublish(message, filePaths) {
         const result = await this._withPassphrase(
             (pass) => this.jsonRpc.publishContent({ message, passphrase: pass, filePaths: filePaths ?? [] }).then(r => r.result)
         );
-        await this.refreshStatus(true);
-        return result;
+        return this._handleOperationResult(result, 'Content published successfully');
     }
 
+    /**
+     * Triggers a publish followed by a sync.
+     * @param {string} message - The commit message
+     * @param {string[]} filePaths - List of files to publish
+     * @returns {Promise<Object>} Combined result
+     */
     async publishAndSync(message, filePaths) {
         const result = await this._withPassphrase(
             (pass) => this.jsonRpc.publishAndSync({ message, passphrase: pass, filePaths: filePaths ?? [] }).then(r => r.result)
         );
-        await this.refreshStatus(true);
-        return result;
+        return this._handleOperationResult(result, 'Content published and synchronized successfully');
     }
 }

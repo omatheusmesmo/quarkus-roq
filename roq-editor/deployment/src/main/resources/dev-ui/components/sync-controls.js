@@ -1,7 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import '@vaadin/button';
 import '@vaadin/icon';
-import { showPrompt } from './prompt-dialog.js';
 
 export class SyncControls extends LitElement {
 
@@ -40,10 +39,15 @@ export class SyncControls extends LitElement {
         }));
     }
 
+    /**
+     * Renders the sync and publish buttons.
+     * 
+     * Button enablement logic:
+     * - While status is unknown (null), keep both buttons available.
+     * - Publish: enabled if there are local changes OR commits ahead of remote OR conflicts to resolve.
+     * - Sync: enabled if there are remote changes OR if local state is clean (safe to pull).
+     */
     render() {
-        // While status is unknown (null), keep both buttons available.
-        // Publish: enabled if there are local changes OR commits ahead of remote.
-        // Sync: enabled if there are remote changes OR if local state is clean.
         const statusKnown = this.status !== null;
         const hasUnpublished = this.status?.hasUnpublished;
         const ahead = this.status?.ahead > 0;

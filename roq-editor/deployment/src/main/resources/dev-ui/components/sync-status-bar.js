@@ -178,21 +178,16 @@ export class SyncStatusBar extends LitElement {
         const isDirty = this.status.hasUnpublished || this.status.ahead > 0;
         const isBehind = this.status.behind > 0 || this.status.hasRemoteChanges;
 
-        // Blockers first
         if (this.status.authFailed && this.status.isSsh) return 'SSH Authentication Required';
         if (this.status.hasConflicts) return 'Git Conflicts Detected';
         
-        // Diverged state (Local + Remote changes)
         if (isDirty && isBehind) return 'Remote & Local changes';
         
-        // Remote priority
         if (isBehind) return 'Remote changes detected';
         
-        // Local attention
         if (this.status.hasUnpublished) return 'Content Not Published';
         if (this.status.ahead > 0) return 'Local commits pending';
         
-        // Normal
         if (this.status.upToDate) return 'Content Up to date';
         
         return 'Ready';
