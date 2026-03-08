@@ -42,10 +42,15 @@ export class SyncControls extends LitElement {
 
     render() {
         // While status is unknown (null), keep both buttons available.
-        // Once status is known: Sync only when no unpublished changes; Publish only when there are.
+        // Publish: enabled if there are local changes OR commits ahead of remote.
+        // Sync: enabled if there are remote changes OR if local state is clean.
         const statusKnown = this.status !== null;
-        const canSync = (!statusKnown || !this.status?.hasUnpublished) && !this.syncing && !this.publishing;
-        const canPublish = (!statusKnown || this.status?.hasUnpublished) && !this.publishing && !this.syncing;
+        const hasUnpublished = this.status?.hasUnpublished;
+        const ahead = this.status?.ahead > 0;
+        const behind = this.status?.behind > 0;
+
+        const canPublish = (!statusKnown || hasUnpublished || ahead) && !this.publishing && !this.syncing;
+        const canSync = (!statusKnown || behind || !hasUnpublished) && !this.syncing && !this.publishing;
 
         return html`
             <vaadin-button

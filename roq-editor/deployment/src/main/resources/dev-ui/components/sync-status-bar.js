@@ -125,15 +125,18 @@ export class SyncStatusBar extends LitElement {
             return html`<vaadin-icon class="status-icon conflict" icon="font-awesome-solid:triangle-exclamation"></vaadin-icon>`;
         }
 
-        if (this.status.ahead > 0 && this.status.behind > 0) {
+        const isDirty = this.status.hasUnpublished || this.status.ahead > 0;
+        const isBehind = this.status.behind > 0 || this.status.hasRemoteChanges;
+
+        if (isDirty && isBehind) {
             return html`<vaadin-icon class="status-icon diverged" icon="font-awesome-solid:arrows-rotate"></vaadin-icon>`;
         }
 
-        if (this.status.behind > 0 || this.status.hasRemoteChanges) {
+        if (isBehind) {
             return html`<vaadin-icon class="status-icon remote-changes" icon="font-awesome-solid:cloud-arrow-down"></vaadin-icon>`;
         }
 
-        if (this.status.ahead > 0 || this.status.hasUnpublished) {
+        if (isDirty) {
             return html`<vaadin-icon class="status-icon unpublished" icon="font-awesome-solid:cloud-arrow-up"></vaadin-icon>`;
         }
 
@@ -148,15 +151,18 @@ export class SyncStatusBar extends LitElement {
         if (this.syncing) return 'Syncing...';
         if (!this.status) return 'Checking status...';
         
+        const isDirty = this.status.hasUnpublished || this.status.ahead > 0;
+        const isBehind = this.status.behind > 0 || this.status.hasRemoteChanges;
+
         // Blockers first
         if (this.status.authFailed && this.status.isSsh) return 'SSH Authentication Required';
         if (this.status.hasConflicts) return 'Git Conflicts Detected';
         
-        // Branch state
-        if (this.status.ahead > 0 && this.status.behind > 0) return 'Branch Diverged';
+        // Diverged state (Local + Remote changes)
+        if (isDirty && isBehind) return 'Remote & Local changes';
         
         // Remote priority
-        if (this.status.behind > 0 || this.status.hasRemoteChanges) return 'Remote changes detected';
+        if (isBehind) return 'Remote changes detected';
         
         // Local attention
         if (this.status.hasUnpublished) return 'Content Not Published';
@@ -201,13 +207,16 @@ export class SyncStatusBar extends LitElement {
     }
 
     _getStatusClass() {
-        if (this.syncing) return 'syncing';
-        if (!this.status) return 'syncing';
+        if (this.syncing || !this.status) return 'syncing';
+        
+        const isDirty = this.status.hasUnpublished || this.status.ahead > 0;
+        const isBehind = this.status.behind > 0 || this.status.hasRemoteChanges;
+
         if (this.status.authFailed && this.status.isSsh) return 'auth';
         if (this.status.hasConflicts) return 'conflict';
-        if (this.status.ahead > 0 && this.status.behind > 0) return 'diverged';
-        if (this.status.behind > 0 || this.status.hasRemoteChanges) return 'remote-changes';
-        if (this.status.ahead > 0 || this.status.hasUnpublished) return 'unpublished';
+        if (isDirty && isBehind) return 'diverged';
+        if (isBehind) return 'remote-changes';
+        if (isDirty) return 'unpublished';
         return 'up-to-date';
     }
 }
