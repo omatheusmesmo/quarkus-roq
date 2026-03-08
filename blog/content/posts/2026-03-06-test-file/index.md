@@ -6,7 +6,7 @@ description: ""
 ---
 Hello from local repository again [Local change]# !!
 
-Hello from remote repository !
+Hello from remote repository
 
 &nbsp;
 
