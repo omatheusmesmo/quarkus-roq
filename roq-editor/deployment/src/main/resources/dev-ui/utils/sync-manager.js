@@ -6,6 +6,7 @@ export class SyncManager {
         this.onPassphraseRequired = onPassphraseRequired;
         this.status = null;
         this.passphrase = null;
+        this.authError = false; 
         this.intervalId = null;
         this.pollingCount = 0;
     }
@@ -23,6 +24,12 @@ export class SyncManager {
         this.refreshStatus(false);
         
         this.intervalId = setInterval(async () => {
+            // Early return if auth is currently failing/required and we don't have a passphrase to try.
+            // This stops polling backend when we are blocked by SSH.
+            if (this.status?.authFailed && !this.passphrase) {
+                return;
+            }
+
             this.pollingCount++;
             // Perform a full fetch every 6 cycles (approx 60s)
             const skipFetch = (this.pollingCount % 6 !== 0);
@@ -34,7 +41,7 @@ export class SyncManager {
 
             // 1. Auto-Sync Logic
             const autoSyncConfig = this.syncConfig?.['auto-sync'];
-            if (autoSyncConfig?.enabled && status.behind > 0) {
+            if (autoSyncConfig?.enabled === true && status.behind > 0) {
                 const syncIntervalMs = (autoSyncConfig['interval-seconds'] || 60) * 1000;
                 if (now - this.lastAutoSyncTime >= syncIntervalMs) {
                     try {
@@ -51,7 +58,7 @@ export class SyncManager {
 
             // 2. Auto-Publish Logic
             const autoPublishConfig = this.syncConfig?.['auto-publish'];
-            if (autoPublishConfig?.enabled && status.hasUnpublished) {
+            if (autoPublishConfig?.enabled === true && status.hasUnpublished) {
                 const publishIntervalMs = (autoPublishConfig['interval-seconds'] || 300) * 1000;
                 if (now - this.lastAutoPublishTime >= publishIntervalMs) {
                     try {
@@ -78,9 +85,8 @@ export class SyncManager {
 
     async refreshStatus(skipFetch = true) {
         try {
-            const currentPassphrase = this.passphrase;
             const response = await this.jsonRpc.getSyncStatus({ 
-                passphrase: currentPassphrase, 
+                passphrase: this.passphrase, 
                 skipFetch 
             });
             const statusInfo = response.result;
@@ -88,13 +94,23 @@ export class SyncManager {
 
             this.status = statusInfo;
             
-            // Only prompt if backend explicitly says authFailed AND it's an SSH repo
+            // Handle SSH Auth Flow
             if (statusInfo.authFailed && statusInfo.isSsh) {
-                console.warn("[SyncManager] Auth error detected for SSH repo, clearing passphrase and prompting");
-                const alreadyTried = !!this.passphrase;
-                this.passphrase = null;
-                // Only show error if we had a passphrase and it failed
-                this.onPassphraseRequired(alreadyTried ? "SSH authentication failed. Please check your passphrase." : null);
+                const isNewFailure = !!this.passphrase;
+                if (isNewFailure) {
+                    console.warn("[SyncManager] SSH authentication failed with the provided passphrase.");
+                    this.authError = true;
+                    this.passphrase = null;
+                    this.onPassphraseRequired("SSH authentication failed. Please check your passphrase.");
+                } else if (!this.authError) {
+                    // First time or error was cleared by user typing, but still authFailed (likely initial prompt)
+                    this.onPassphraseRequired(null);
+                }
+                // If this.authError is already true and passphrase is null (subsequent polling), 
+                // we do NOTHING. This preserves the error message in the open dialog.
+            } else if (!statusInfo.authFailed) {
+                // Success! Clear error state
+                this.authError = false;
             }
             
             this.onStatusChange(statusInfo);
@@ -106,6 +122,7 @@ export class SyncManager {
 
     setPassphrase(passphrase) {
         this.passphrase = passphrase;
+        this.authError = false; // Reset error state on new attempt
         // Immediate full refresh to validate the new passphrase
         this.refreshStatus(false);
     }
