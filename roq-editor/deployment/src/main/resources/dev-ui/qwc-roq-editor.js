@@ -330,6 +330,8 @@ export class QwcRoqEditor extends LitElement {
                     if (this._syncManager) {
                         this._syncManager.refreshStatus(true);
                     }
+                    // Optimistic update
+                    this._optimisticGitDirty();
                     this._onPageOpen({detail: {page: result.page, content: result.content}});
                 }).catch(error => {
                     showNotification('Error creating page: ' + error.message);
@@ -392,6 +394,8 @@ export class QwcRoqEditor extends LitElement {
             if (this._syncManager) {
                 this._syncManager.refreshStatus(true);
             }
+            // Optimistic update
+            this._optimisticGitDirty();
             this._pendingRefreshPages = true;
         }).catch(error => {
             showNotification('Error syncing page path: ' + error.message);
@@ -513,6 +517,9 @@ export class QwcRoqEditor extends LitElement {
                 if (target && target.markSaved) {
                     target.markSaved();
                 }
+
+                // Optimistic update: mark as dirty immediately
+                this._optimisticGitDirty();
             }
         }).catch(error => {
             if (target && target.markSaveError) {
@@ -548,6 +555,8 @@ export class QwcRoqEditor extends LitElement {
                 if (this._syncManager) {
                     this._syncManager.refreshStatus(true);
                 }
+                // Optimistic update
+                this._optimisticGitDirty();
 
             } else {
                 showNotification('Error deleting page: ' + (result || 'Unknown error'));
@@ -556,6 +565,16 @@ export class QwcRoqEditor extends LitElement {
             showNotification('Error deleting page: ' + error.message);
             console.error(error);
         });
+    }
+
+    _optimisticGitDirty() {
+        if (this._syncStatus && !this._syncStatus.hasUnpublished) {
+            this._syncStatus = {
+                ...this._syncStatus,
+                hasUnpublished: true,
+                upToDate: false
+            };
+        }
     }
 
     _showPassphraseDialog(errorMsg) {
@@ -609,8 +628,12 @@ export class QwcRoqEditor extends LitElement {
             if (selectedFiles === null) return; // cancelled
         }
 
-        const message = await showPrompt('Commit message', 'Update content via Roq Editor');
-        if (!message) return;
+        const needsCommit = selectedFiles.length > 0 || freshStatus?.repositoryState === 'MERGING';
+        let message = null;
+        if (needsCommit) {
+            message = await showPrompt('Commit message', config.sync?.['commit-message']?.template || 'Update content via Roq Editor');
+            if (!message) return;
+        }
 
         this._publishing = true;
         this._pendingSyncOperation = () => this._onPublishRequested(event);
