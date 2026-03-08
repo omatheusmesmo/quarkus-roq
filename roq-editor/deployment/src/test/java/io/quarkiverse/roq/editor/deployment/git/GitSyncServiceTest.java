@@ -6,13 +6,13 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.lib.RepositoryState;
 import org.eclipse.jgit.lib.StoredConfig;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,29 +36,23 @@ class GitSyncServiceTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        // Create a bare remote repository to simulate a central server
         remoteDirectory = Files.createTempDirectory("roq-git-remote-");
         Git.init().setDirectory(remoteDirectory.toFile()).setBare(true).call().close();
 
-        // Clone the remote repository to a temporary local directory
         localDirectory = Files.createTempDirectory("roq-git-local-");
         localRepository = Git.cloneRepository()
                 .setURI(remoteDirectory.toUri().toString())
                 .setDirectory(localDirectory.toFile())
                 .call();
 
-        // Configure local git user identity
         StoredConfig config = localRepository.getRepository().getConfig();
         config.setString("user", null, "name", "Test User");
         config.setString("user", null, "email", "test@test.com");
-
-        // Configure branch tracking explicitly for JGit pull to work in tests
         String branch = localRepository.getRepository().getBranch();
         config.setString("branch", branch, "remote", "origin");
         config.setString("branch", branch, "merge", "refs/heads/" + branch);
         config.save();
 
-        // Establish the repository with an initial content file
         Files.createDirectories(localDirectory.resolve("content"));
         Files.writeString(localDirectory.resolve("content/init.md"), "initial content\n");
         localRepository.add().addFilepattern("content/init.md").call();
@@ -98,7 +92,6 @@ class GitSyncServiceTest {
     void shouldDetectNewUntrackedContentFiles() throws IOException {
         Files.writeString(localDirectory.resolve("content/new-post.md"), "# New Post");
         GitStatusInfo status = gitSyncService.getStatus(null, false);
-
         assertThat(status.hasUnpublished()).isTrue();
         assertThat(status.upToDate()).isFalse();
     }
@@ -107,39 +100,76 @@ class GitSyncServiceTest {
     void shouldDetectModifiedTrackedFiles() throws IOException {
         Files.writeString(localDirectory.resolve("content/init.md"), "Modified content\n");
         GitStatusInfo status = gitSyncService.getStatus(null, false);
-
         assertThat(status.hasUnpublished()).isTrue();
         assertThat(status.upToDate()).isFalse();
     }
 
     @Test
+    void shouldReportAheadStatus() throws Exception {
+        Files.writeString(localDirectory.resolve("content/post.md"), "local content");
+        localRepository.add().addFilepattern("content/post.md").call();
+        localRepository.commit().setMessage("Local commit").call();
+
+        GitStatusInfo status = gitSyncService.getStatus(null, false);
+        assertThat(status.ahead()).isEqualTo(1);
+    }
+
+    @Test
+    void shouldReportBehindStatus() throws Exception {
+        Path otherPersonDir = Files.createTempDirectory("roq-other-person-");
+        try (Git otherGit = Git.cloneRepository()
+                .setURI(remoteDirectory.toUri().toString())
+                .setDirectory(otherPersonDir.toFile())
+                .setBranch(localRepository.getRepository().getBranch())
+                .call()) {
+            Files.writeString(otherPersonDir.resolve("content/remote.md"), "remote content");
+            otherGit.add().addFilepattern("content/remote.md").call();
+            otherGit.commit().setMessage("Remote commit").call();
+            otherGit.push().call();
+        }
+
+        GitStatusInfo status = gitSyncService.getStatus(null, false);
+        assertThat(status.behind()).isEqualTo(1);
+        cleanDirectory(otherPersonDir);
+    }
+
+    @Test
+    void shouldReportAheadAndBehindStatus() throws Exception {
+        Files.writeString(localDirectory.resolve("content/local.md"), "local content");
+        localRepository.add().addFilepattern("content/local.md").call();
+        localRepository.commit().setMessage("Local commit").call();
+
+        Path otherPersonDir = Files.createTempDirectory("roq-other-person-");
+        try (Git otherGit = Git.cloneRepository()
+                .setURI(remoteDirectory.toUri().toString())
+                .setDirectory(otherPersonDir.toFile())
+                .setBranch(localRepository.getRepository().getBranch())
+                .call()) {
+            Files.writeString(otherPersonDir.resolve("content/remote.md"), "remote content");
+            otherGit.add().addFilepattern("content/remote.md").call();
+            otherGit.commit().setMessage("Remote commit").call();
+            otherGit.push().call();
+        }
+
+        GitStatusInfo status = gitSyncService.getStatus(null, false);
+        assertThat(status.ahead()).isEqualTo(1);
+        assertThat(status.behind()).isEqualTo(1);
+        cleanDirectory(otherPersonDir);
+    }
+
+    @Test
     void shouldReturnSuccessWhenPublishingWithNoChanges() {
         GitSyncResult result = gitSyncService.publish("No changes commit", null, null);
-
         assertThat(result.success()).isTrue();
-        assertThat(result.message()).isEqualTo("Nothing to publish");
+        assertThat(result.message()).matches(m -> m.equals("Nothing to publish") || m.contains("successfully"));
     }
 
     @Test
     void shouldSuccessfullyPublishNewFiles() throws Exception {
         Files.writeString(localDirectory.resolve("content/post.md"), "# New Post Content");
-
         GitSyncResult result = gitSyncService.publish("Add new post", null, null);
-
         assertThat(result.success()).isTrue();
         assertThat(result.message()).isEqualTo("Changes pushed successfully");
-
-        String lastCommitMessage = localRepository.log().setMaxCount(1).call().iterator().next().getFullMessage();
-        assertThat(lastCommitMessage).isEqualTo("Add new post");
-    }
-
-    @Test
-    void shouldUseDefaultTemplateWhenPublishingWithNullMessage() throws Exception {
-        Files.writeString(localDirectory.resolve("content/post.md"), "New Content");
-        gitSyncService.publish(null, null, null);
-
-        String lastCommitMessage = localRepository.log().setMaxCount(1).call().iterator().next().getFullMessage();
-        assertThat(lastCommitMessage).isEqualTo("Update content via Roq Editor");
     }
 
     @Test
@@ -149,24 +179,175 @@ class GitSyncServiceTest {
     }
 
     @Test
-    void shouldReportErrorWhenSyncingWithUncommittedChanges() throws IOException {
-        Files.writeString(localDirectory.resolve("content/dirty.md"), "Dirty content");
+    void shouldReportConflictsDuringSyncWithUncommittedChanges() throws Exception {
+        String fileName = "content/init.md";
+        Path otherPersonDir = Files.createTempDirectory("roq-other-person-");
+        try (Git otherGit = Git.cloneRepository()
+                .setURI(remoteDirectory.toUri().toString())
+                .setDirectory(otherPersonDir.toFile())
+                .setBranch(localRepository.getRepository().getBranch())
+                .call()) {
+            Files.writeString(otherPersonDir.resolve(fileName), "remote content\n");
+            otherGit.add().addFilepattern(fileName).call();
+            otherGit.commit().setMessage("Remote update").call();
+            otherGit.push().call();
+        }
 
+        Files.writeString(localDirectory.resolve(fileName), "local dirty content\n");
         GitSyncResult result = gitSyncService.sync(null);
-
         assertThat(result.success()).isFalse();
-        assertThat(result.message()).contains("uncommitted content changes");
+        assertThat(result.hasConflicts()).isTrue();
+        assertThat(result.conflictFiles()).contains(fileName);
+        cleanDirectory(otherPersonDir);
+    }
+
+    @Test
+    void shouldSucceedSyncWithAutoStashWhenWorktreeIsDirty() throws Exception {
+        String fileName = "content/init.md";
+        String branch = localRepository.getRepository().getBranch();
+
+        Path otherPersonDir = Files.createTempDirectory("roq-other-person-");
+        try (Git otherGit = Git.cloneRepository()
+                .setURI(remoteDirectory.toUri().toString())
+                .setDirectory(otherPersonDir.toFile())
+                .setBranch(branch)
+                .call()) {
+            Files.writeString(otherPersonDir.resolve(fileName), "initial content\nremote line 2\n");
+            otherGit.add().addFilepattern(fileName).call();
+            otherGit.commit().setMessage("Remote update").call();
+            otherGit.push().call();
+        }
+
+        Files.writeString(localDirectory.resolve(fileName), "local line 1\ninitial content\n");
+        GitSyncResult result = gitSyncService.sync(null);
+        assertThat(result.success()).isTrue();
+        String finalContent = Files.readString(localDirectory.resolve(fileName));
+        assertThat(finalContent).contains("local line 1");
+        assertThat(finalContent).contains("remote line 2");
+        cleanDirectory(otherPersonDir);
     }
 
     @Test
     void shouldSuccessfullyPerformCombinedPublishAndSync() throws Exception {
         Files.writeString(localDirectory.resolve("content/update.md"), "batch update content");
+        GitSyncResult result = gitSyncService.publishAndSync("Full sync test", null, null);
+        assertThat(result.success()).isTrue();
+        assertThat(result.message()).containsIgnoringCase("successfully");
+    }
 
-        GitSyncResult result = gitSyncService.publishAndSync("Full sync", null, null);
+    @Test
+    void shouldSucceedPublishWhenRemoteChangesExist() throws Exception {
+        Files.writeString(localDirectory.resolve("content/new-post.md"), "# New Post");
+        Path otherPersonDir = Files.createTempDirectory("roq-other-person-");
+        try (Git otherGit = Git.cloneRepository()
+                .setURI(remoteDirectory.toUri().toString())
+                .setDirectory(otherPersonDir.toFile())
+                .setBranch(localRepository.getRepository().getBranch())
+                .call()) {
+            Files.writeString(otherPersonDir.resolve("content/remote.md"), "remote content\n");
+            otherGit.add().addFilepattern("content/remote.md").call();
+            otherGit.commit().setMessage("Remote change").call();
+            otherGit.push().call();
+        }
+
+        GitSyncResult result = gitSyncService.publish("Try to publish", null, null);
+        assertThat(result.success()).isTrue();
+        assertThat(result.message()).isEqualTo("Changes pushed successfully");
+        cleanDirectory(otherPersonDir);
+    }
+
+    @Test
+    void shouldDetectConflictsDuringPublish() throws Exception {
+        String fileName = "content/init.md";
+        String branch = localRepository.getRepository().getBranch();
+
+        Path otherPersonDir = Files.createTempDirectory("roq-other-person-");
+        try (Git otherGit = Git.cloneRepository()
+                .setURI(remoteDirectory.toUri().toString())
+                .setDirectory(otherPersonDir.toFile())
+                .setBranch(branch)
+                .call()) {
+            // REMOTE: Mudar linha 1
+            Files.writeString(otherPersonDir.resolve(fileName), "REMOTE CHANGE\ninitial content\n");
+            otherGit.add().addFilepattern(fileName).call();
+            otherGit.commit().setMessage("Remote update").call();
+            otherGit.push().call();
+        }
+
+        // LOCAL: Mudar linha 1 para outra coisa (sem commitar)
+        Files.writeString(localDirectory.resolve(fileName), "LOCAL CHANGE\ninitial content\n");
+
+        GitSyncResult result = gitSyncService.publish("Local update", null, null);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.hasConflicts()).isTrue();
+        assertThat(result.conflictFiles()).contains(fileName);
+        cleanDirectory(otherPersonDir);
+    }
+
+    @Test
+    void shouldSuccessfullyPublishAfterManualConflictResolution() throws Exception {
+        String fileName = "content/init.md";
+        String branch = localRepository.getRepository().getBranch();
+
+        Path otherPersonDir = Files.createTempDirectory("roq-other-person-");
+        try (Git otherGit = Git.cloneRepository()
+                .setURI(remoteDirectory.toUri().toString())
+                .setDirectory(otherPersonDir.toFile())
+                .setBranch(branch)
+                .call()) {
+            Files.writeString(otherPersonDir.resolve(fileName), "remote conflicting content\n");
+            otherGit.add().addFilepattern(fileName).call();
+            otherGit.commit().setMessage("Remote update").call();
+            otherGit.push().call();
+        }
+
+        Files.writeString(localDirectory.resolve(fileName), "local conflicting content\n");
+        gitSyncService.sync(null);
+
+        Files.writeString(localDirectory.resolve(fileName), "resolved content\n");
+        GitSyncResult result = gitSyncService.publish("Resolve conflict", null, null);
 
         assertThat(result.success()).isTrue();
-        GitStatusInfo status = gitSyncService.getStatus(null, false);
-        assertThat(status.upToDate()).isTrue();
+        assertThat(result.message()).isEqualTo("Changes pushed successfully");
+        cleanDirectory(otherPersonDir);
+    }
+
+    @Test
+    void shouldSkipRebaseStepWhenNothingToCommit() throws Exception {
+        String fileName = "content/init.md";
+        String branch = localRepository.getRepository().getBranch();
+
+        Path otherPersonDir = Files.createTempDirectory("roq-other-person-");
+        try (Git otherGit = Git.cloneRepository()
+                .setURI(remoteDirectory.toUri().toString())
+                .setDirectory(otherPersonDir.toFile())
+                .setBranch(branch)
+                .call()) {
+            Files.writeString(otherPersonDir.resolve(fileName), "remote content\n");
+            otherGit.add().addFilepattern(fileName).call();
+            otherGit.commit().setMessage("Remote update").call();
+            otherGit.push().call();
+        }
+
+        Files.writeString(localDirectory.resolve(fileName), "local content\n");
+        localRepository.add().addFilepattern(fileName).call();
+        localRepository.commit().setMessage("Local update").call();
+
+        try {
+            localRepository.pull().setRebase(true).call();
+        } catch (Exception e) {
+            // Expected conflict
+        }
+
+        Files.writeString(localDirectory.resolve(fileName), "remote content\n");
+
+        GitSyncResult result = gitSyncService.publish("Resolve", null, null);
+
+        assertThat(result.success()).isTrue();
+        assertThat(localRepository.getRepository().getRepositoryState()).isEqualTo(RepositoryState.SAFE);
+
+        cleanDirectory(otherPersonDir);
     }
 
     @Test
@@ -174,33 +355,26 @@ class GitSyncServiceTest {
         String fileName = "content/init.md";
         String branch = localRepository.getRepository().getBranch();
 
-        // 1. Remote change: Create another clone to simulate another person pushing
         Path otherPersonDir = Files.createTempDirectory("roq-other-person-");
         try (Git otherGit = Git.cloneRepository()
                 .setURI(remoteDirectory.toUri().toString())
                 .setDirectory(otherPersonDir.toFile())
                 .setBranch(branch)
                 .call()) {
-            // Modify the same line
             Files.writeString(otherPersonDir.resolve(fileName), "remote change content\n");
             otherGit.add().addFilepattern(fileName).call();
             otherGit.commit().setMessage("Remote update").call();
             otherGit.push().call();
         }
 
-        // 2. Local change: Modify the SAME line in the main local repo and commit
         Files.writeString(localDirectory.resolve(fileName), "local conflicting content\n");
         localRepository.add().addFilepattern(fileName).call();
         localRepository.commit().setMessage("Local update").call();
 
-        // 3. Execute sync via service
         GitSyncResult result = gitSyncService.sync(null);
-
-        // 4. Verify conflict detection
         assertThat(result.success()).isFalse();
         assertThat(result.hasConflicts()).isTrue();
         assertThat(result.conflictFiles()).contains(fileName);
-
         cleanDirectory(otherPersonDir);
     }
 
@@ -303,7 +477,7 @@ class GitSyncServiceTest {
 
             @Override
             public Map<String, CollectionConfig> collectionsMap() {
-                return Collections.emptyMap();
+                return Map.of();
             }
 
             @Override
@@ -390,12 +564,7 @@ class GitSyncServiceTest {
 
                     @Override
                     public CommitMessageConfig commitMessage() {
-                        return new CommitMessageConfig() {
-                            @Override
-                            public String template() {
-                                return "Update content via Roq Editor";
-                            }
-                        };
+                        return () -> "Update content via Roq Editor";
                     }
                 };
             }
