@@ -375,6 +375,39 @@ class GitSyncServiceTest {
         cleanDirectory(otherPersonDir);
     }
 
+    @Test
+    void shouldReportAuthFailedWhenFetchFailsOnSshRemote() throws Exception {
+        StoredConfig config = localRepository.getRepository().getConfig();
+        config.setString("remote", "origin", "url", "git@github.com:quarkiverse/quarkus-roq.git");
+        config.save();
+
+        GitStatusInfo status = gitSyncService.getStatus(null, false);
+
+        assertThat(status.isSsh()).isTrue();
+        assertThat(status.authFailed()).isTrue();
+    }
+
+    @Test
+    void shouldPreserveLocalStatusEvenWhenAuthIsRequired() throws Exception {
+        Files.writeString(localDirectory.resolve("content/ahead.md"), "ahead content");
+        localRepository.add().addFilepattern("content/ahead.md").call();
+        localRepository.commit().setMessage("Ahead commit").call();
+        Files.writeString(localDirectory.resolve("content/dirty.md"), "dirty content");
+
+        StoredConfig config = localRepository.getRepository().getConfig();
+        config.setString("remote", "origin", "url", "git@github.com:quarkiverse/quarkus-roq.git");
+        config.save();
+
+        GitStatusInfo status = gitSyncService.getStatus(null, false);
+
+        assertThat(status.isSsh()).isTrue();
+        assertThat(status.authFailed()).isTrue();
+
+        assertThat(status.ahead()).isEqualTo(1);
+        assertThat(status.hasUnpublished()).isTrue();
+        assertThat(status.pendingFiles()).contains("content/dirty.md");
+    }
+
     private RoqSiteConfig createSiteConfig() {
         return new RoqSiteConfig() {
             @Override

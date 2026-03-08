@@ -82,13 +82,11 @@ public class GitSyncServiceImpl implements GitSyncService {
                 List<String> conflictFiles = new ArrayList<>(status.getConflicting());
                 boolean hasConflicts = !conflictFiles.isEmpty() || repoState != RepositoryState.SAFE;
 
-                if (GitTransportHelper.isAuthRequired(repository, passphrase)) {
-                    return new GitStatusInfo(false, hasUnpublished, false, currentBranch, 0, 0, contentChanges, true,
-                            hasConflicts, repoState.name(), conflictFiles, true);
-                }
+                boolean authRequired = GitTransportHelper.isAuthRequired(repository, passphrase);
+                boolean authFailed = false;
 
-                if (!skipFetch) {
-                    tryFetch(git, passphrase, isSsh);
+                if (!skipFetch && !authRequired) {
+                    authFailed = tryFetch(git, passphrase, isSsh);
                 }
 
                 BranchTrackingStatus trackingStatus = BranchTrackingStatus.of(repository, currentBranch);
@@ -96,10 +94,11 @@ public class GitSyncServiceImpl implements GitSyncService {
                 int behindCount = (trackingStatus != null) ? trackingStatus.getBehindCount() : 0;
 
                 boolean isUpToDate = aheadCount == 0 && behindCount == 0 && !hasUnpublished && repoState == RepositoryState.SAFE
-                        && !hasConflicts;
+                        && !hasConflicts && !authFailed && !authRequired;
 
                 return new GitStatusInfo(isUpToDate, hasUnpublished, behindCount > 0, currentBranch,
-                        aheadCount, behindCount, contentChanges, false, hasConflicts, repoState.name(), conflictFiles, isSsh);
+                        aheadCount, behindCount, contentChanges, authFailed || authRequired, hasConflicts, repoState.name(),
+                        conflictFiles, isSsh);
             }
         } catch (Exception e) {
             return handleStatusFailure(e);
@@ -259,14 +258,18 @@ public class GitSyncServiceImpl implements GitSyncService {
      * @param git the Git instance
      * @param passphrase the SSH passphrase
      * @param isSsh true if the remote is an SSH URL
+     * @return true if authentication failed
      */
-    private void tryFetch(Git git, String passphrase, boolean isSsh) {
+    private boolean tryFetch(Git git, String passphrase, boolean isSsh) {
         try {
             performFetch(git, passphrase);
+            return false;
         } catch (Exception fetchEx) {
             if (GitTransportHelper.isAuthenticationError(fetchEx) && isSsh) {
                 LOG.warn("SSH authentication failed during fetch poll: " + fetchEx.getMessage());
+                return true;
             }
+            return false;
         }
     }
 
