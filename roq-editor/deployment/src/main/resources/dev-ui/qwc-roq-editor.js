@@ -327,6 +327,9 @@ export class QwcRoqEditor extends LitElement {
                     } else {
                         this._pages = [result.page].concat(this._pages);
                     }
+                    if (this._syncManager) {
+                        this._syncManager.refreshStatus(true);
+                    }
                     this._onPageOpen({detail: {page: result.page, content: result.content}});
                 }).catch(error => {
                     showNotification('Error creating page: ' + error.message);
@@ -385,6 +388,9 @@ export class QwcRoqEditor extends LitElement {
 
             if (this._selectedPage?.path === page.path) {
                 this._selectedPage = updated;
+            }
+            if (this._syncManager) {
+                this._syncManager.refreshStatus(true);
             }
             this._pendingRefreshPages = true;
         }).catch(error => {
@@ -500,6 +506,10 @@ export class QwcRoqEditor extends LitElement {
 
                 this._pendingRefreshPages = "background";
 
+                if (this._syncManager) {
+                    this._syncManager.refreshStatus(true); // skip fetch, just check local status
+                }
+
                 if (target && target.markSaved) {
                     target.markSaved();
                 }
@@ -534,6 +544,9 @@ export class QwcRoqEditor extends LitElement {
                     this._posts = updated;
                 } else {
                     this._pages = updated;
+                }
+                if (this._syncManager) {
+                    this._syncManager.refreshStatus(true);
                 }
 
             } else {

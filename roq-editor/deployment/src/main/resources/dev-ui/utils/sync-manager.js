@@ -13,8 +13,6 @@ export class SyncManager {
     start() {
         if (this.intervalId) return;
         
-        // Use configured interval or default to 10s for status polling
-        // Note: SmallRye Config maps intervalSeconds to interval-seconds in JSON
         const autoSyncConfig = this.syncConfig?.['auto-sync'];
         const intervalMs = (autoSyncConfig?.['interval-seconds'] || 10) * 1000;
         
@@ -26,7 +24,7 @@ export class SyncManager {
             // Perform a full fetch every 6 cycles (approx 60s if interval is 10s)
             const skipFetch = (this.pollingCount % 6 !== 0);
             this.refreshStatus(skipFetch);
-        }, 10000); 
+        }, intervalMs); 
     }
 
     stop() {
@@ -38,9 +36,9 @@ export class SyncManager {
 
     async refreshStatus(skipFetch = true) {
         try {
-            const hasPassphrase = !!this.passphrase;
+            const currentPassphrase = this.passphrase;
             const response = await this.jsonRpc.getSyncStatus({ 
-                passphrase: this.passphrase, 
+                passphrase: currentPassphrase, 
                 skipFetch 
             });
             const statusInfo = response.result;
@@ -48,38 +46,50 @@ export class SyncManager {
 
             this.status = statusInfo;
             
-            if (statusInfo.authFailed && !hasPassphrase) {
+            // Only prompt if backend explicitly says authFailed AND it's an SSH repo
+            if (statusInfo.authFailed && statusInfo.isSsh) {
+                console.warn("[SyncManager] Auth error detected for SSH repo, clearing passphrase and prompting");
+                this.passphrase = null;
                 this.onPassphraseRequired();
             }
             
             this.onStatusChange(statusInfo);
             return statusInfo;
         } catch (error) {
-            console.error("Failed to refresh Git status", error);
+            console.error("[SyncManager] Failed to refresh Git status", error);
         }
     }
 
     setPassphrase(passphrase) {
         this.passphrase = passphrase;
+        // Immediate full refresh to validate the new passphrase
         this.refreshStatus(false);
     }
 
+    _isAuthError(errorOrMsg) {
+        const msg = typeof errorOrMsg === 'string' ? errorOrMsg : (errorOrMsg?.message || "");
+        // STRICT CHECK: Only trigger for our custom prefixes
+        return msg.includes("AUTH_FAILED:") || msg.includes("AUTH_REQUIRED:");
+    }
+
     async _withPassphrase(operation) {
-        if (!this.passphrase && this.status?.authFailed) {
+        // Proactive check: Only for SSH
+        if (!this.passphrase && this.status?.authFailed && this.status?.isSsh) {
             this.onPassphraseRequired();
-            throw new Error("Authentication required");
+            throw new Error("AUTH_REQUIRED: SSH passphrase required");
         }
         try {
             const result = await operation(this.passphrase);
-            if (result?.authFailed) {
+            
+            if (result?.authFailed && this.status?.isSsh) {
                 this.passphrase = null;
                 this.onPassphraseRequired();
-                throw new Error("Authentication failed");
+                const errorMsg = result?.message || "Authentication failed";
+                throw new Error(errorMsg.startsWith("AUTH_") ? errorMsg : `AUTH_FAILED:${errorMsg}`);
             }
             return result;
         } catch (error) {
-            const msg = error.message?.toLowerCase() || "";
-            if (msg.includes("auth") || msg.includes("passphrase")) {
+            if (this._isAuthError(error)) {
                 this.passphrase = null;
                 this.onPassphraseRequired();
             }
@@ -91,7 +101,7 @@ export class SyncManager {
         const result = await this._withPassphrase(
             (pass) => this.jsonRpc.syncContent({ passphrase: pass }).then(r => r.result)
         );
-        await this.refreshStatus();
+        await this.refreshStatus(true);
         return result;
     }
 
@@ -99,7 +109,7 @@ export class SyncManager {
         const result = await this._withPassphrase(
             (pass) => this.jsonRpc.publishContent({ message, passphrase: pass, filePaths: filePaths ?? [] }).then(r => r.result)
         );
-        await this.refreshStatus();
+        await this.refreshStatus(true);
         return result;
     }
 
@@ -107,7 +117,7 @@ export class SyncManager {
         const result = await this._withPassphrase(
             (pass) => this.jsonRpc.publishAndSync({ message, passphrase: pass, filePaths: filePaths ?? [] }).then(r => r.result)
         );
-        await this.refreshStatus();
+        await this.refreshStatus(true);
         return result;
     }
 }

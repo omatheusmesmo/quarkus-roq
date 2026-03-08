@@ -17,44 +17,49 @@ export class SyncStatusBar extends LitElement {
             background: var(--lumo-contrast-5pct);
             border-radius: var(--lumo-border-radius-m);
             font-size: var(--lumo-font-size-xs);
+            transition: background 0.3s ease;
         }
 
-        .status-indicator {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
+        :host(:hover) {
+            background: var(--lumo-contrast-10pct);
+        }
+
+        .status-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 16px;
+            height: 16px;
             flex-shrink: 0;
         }
 
-        .status-indicator.up-to-date {
-            background: var(--lumo-success-color);
+        .status-icon vaadin-icon {
+            width: 14px;
+            height: 14px;
         }
 
-        .status-indicator.unpublished {
-            background: var(--lumo-warning-color);
-        }
+        /* Semantic Colors */
+        .up-to-date { color: var(--lumo-success-color); }
+        .unpublished { color: var(--lumo-warning-color); }
+        .remote-changes { color: var(--lumo-primary-color); }
+        .diverged { color: #9c27b0; } 
+        .conflict { color: var(--lumo-error-color); }
+        .syncing { color: var(--lumo-contrast-40pct); }
+        .auth { color: var(--lumo-error-color); }
 
-        .status-indicator.remote-changes {
-            background: var(--lumo-primary-color);
-        }
-
-        .status-indicator.syncing {
-            background: var(--lumo-contrast-40pct);
+        .pulse {
             animation: pulse 1.5s ease-in-out infinite;
         }
 
-        .status-indicator.error {
-            background: var(--lumo-error-color);
-        }
-
         @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(0.9); }
         }
 
         .status-text {
             color: var(--lumo-secondary-text-color);
             white-space: nowrap;
+            font-weight: 500;
         }
 
         .branch-info {
@@ -67,7 +72,7 @@ export class SyncStatusBar extends LitElement {
         }
 
         .branch-name {
-            color: var(--lumo-contrast-70pct);
+            color: var(--lumo-contrast-80pct);
             font-family: var(--lumo-font-family-mono);
             font-size: var(--lumo-font-size-xxs);
             padding: 2px 6px;
@@ -79,15 +84,21 @@ export class SyncStatusBar extends LitElement {
             display: flex;
             gap: var(--lumo-space-xs);
             font-size: var(--lumo-font-size-xxs);
-            color: var(--lumo-contrast-60pct);
+            font-weight: bold;
         }
 
-        .ahead {
-            color: var(--lumo-success-text-color);
-        }
+        .ahead { color: var(--lumo-warning-text-color); }
+        .behind { color: var(--lumo-primary-text-color); }
 
-        .behind {
-            color: var(--lumo-error-text-color);
+        .state-tag {
+            font-size: 9px;
+            text-transform: uppercase;
+            padding: 1px 4px;
+            background: var(--lumo-error-color-10pct);
+            color: var(--lumo-error-color);
+            border-radius: 4px;
+            margin-left: 4px;
+            font-weight: bold;
         }
     `;
 
@@ -97,47 +108,103 @@ export class SyncStatusBar extends LitElement {
         this.syncing = false;
     }
 
-    _getStatusClass() {
-        if (this.syncing) return 'syncing';
-        if (!this.status) return 'syncing'; // unknown → neutral pulsing instead of red error
-        if (this.status.hasUnpublished && this.status.hasRemoteChanges) return 'remote-changes';
-        if (this.status.upToDate) return 'up-to-date';
-        if (this.status.hasUnpublished) return 'unpublished';
-        if (this.status.hasRemoteChanges) return 'remote-changes';
-        return 'up-to-date';
+    _renderStatus() {
+        if (this.syncing) {
+            return html`<vaadin-icon class="status-icon syncing pulse" icon="font-awesome-solid:rotate"></vaadin-icon>`;
+        }
+        
+        if (!this.status) {
+            return html`<div class="status-icon syncing pulse" style="background: var(--lumo-contrast-20pct); border-radius: 50%; width: 8px; height: 8px;"></div>`;
+        }
+
+        if (this.status.authFailed && this.status.isSsh) {
+            return html`<vaadin-icon class="status-icon auth pulse" icon="font-awesome-solid:lock"></vaadin-icon>`;
+        }
+
+        if (this.status.hasConflicts) {
+            return html`<vaadin-icon class="status-icon conflict" icon="font-awesome-solid:triangle-exclamation"></vaadin-icon>`;
+        }
+
+        if (this.status.ahead > 0 && this.status.behind > 0) {
+            return html`<vaadin-icon class="status-icon diverged" icon="font-awesome-solid:arrows-rotate"></vaadin-icon>`;
+        }
+
+        if (this.status.behind > 0 || this.status.hasRemoteChanges) {
+            return html`<vaadin-icon class="status-icon remote-changes" icon="font-awesome-solid:cloud-arrow-down"></vaadin-icon>`;
+        }
+
+        if (this.status.ahead > 0 || this.status.hasUnpublished) {
+            return html`<vaadin-icon class="status-icon unpublished" icon="font-awesome-solid:cloud-arrow-up"></vaadin-icon>`;
+        }
+
+        if (this.status.upToDate) {
+            return html`<div class="status-icon up-to-date" style="background: currentColor; border-radius: 50%; width: 8px; height: 8px; margin: 4px;"></div>`;
+        }
+
+        return html`<div class="status-icon syncing" style="background: var(--lumo-contrast-20pct); border-radius: 50%; width: 8px; height: 8px; margin: 4px;"></div>`;
     }
 
     _getStatusText() {
         if (this.syncing) return 'Syncing...';
         if (!this.status) return 'Checking status...';
-        if (this.status.hasUnpublished && this.status.hasRemoteChanges) return 'Unpublished changes & remote changes detected';
-        if (this.status.upToDate) return 'Content up to date';
-        if (this.status.hasUnpublished) return 'Content not published';
-        if (this.status.hasRemoteChanges) return 'Remote changes detected';
-        return 'Content up to date';
+        
+        // Blockers first
+        if (this.status.authFailed && this.status.isSsh) return 'SSH Authentication Required';
+        if (this.status.hasConflicts) return 'Git Conflicts Detected';
+        
+        // Remote priority
+        if (this.status.behind > 0 || this.status.hasRemoteChanges) return 'Remote changes detected';
+        
+        // Local attention
+        if (this.status.ahead > 0 || this.status.hasUnpublished) return 'Content Not Published';
+        
+        // Normal
+        if (this.status.upToDate) return 'Content Up to date';
+        
+        return 'Ready';
     }
 
     render() {
+        const repoState = this.status?.repositoryState;
+        const isSafe = !repoState || repoState === 'SAFE';
+
         return html`
-            <div class="status-indicator ${this._getStatusClass()}"></div>
+            <div class="status-icon ${this._getStatusClass()}">
+                ${this._renderStatus()}
+            </div>
+            
             <span class="status-text">${this._getStatusText()}</span>
+            
+            ${!isSafe ? html`<span class="state-tag">${repoState.replace('_', ' ')}</span>` : ''}
+            
             ${this.status?.branch && this.status.branch !== 'sync-disabled' ? html`
                 <div class="branch-info">
-                    <vaadin-icon icon="font-awesome-solid:code-branch"></vaadin-icon>
+                    <vaadin-icon icon="font-awesome-solid:code-branch" style="width: 12px; color: var(--lumo-contrast-50pct)"></vaadin-icon>
                     <span class="branch-name">${this.status.branch}</span>
                     ${this.status.ahead > 0 || this.status.behind > 0 ? html`
                         <div class="ahead-behind">
                             ${this.status.ahead > 0 ? html`
-                                <span class="ahead" title="Commits ahead">↑${this.status.ahead}</span>
+                                <span class="ahead" title="${this.status.ahead} commits ahead">↑${this.status.ahead}</span>
                             ` : ''}
                             ${this.status.behind > 0 ? html`
-                                <span class="behind" title="Commits behind">↓${this.status.behind}</span>
+                                <span class="behind" title="${this.status.behind} commits behind">↓${this.status.behind}</span>
                             ` : ''}
                         </div>
                     ` : ''}
                 </div>
             ` : ''}
         `;
+    }
+
+    _getStatusClass() {
+        if (this.syncing) return 'syncing';
+        if (!this.status) return 'syncing';
+        if (this.status.authFailed && this.status.isSsh) return 'auth';
+        if (this.status.hasConflicts) return 'conflict';
+        if (this.status.ahead > 0 && this.status.behind > 0) return 'diverged';
+        if (this.status.behind > 0 || this.status.hasRemoteChanges) return 'remote-changes';
+        if (this.status.ahead > 0 || this.status.hasUnpublished) return 'unpublished';
+        return 'up-to-date';
     }
 }
 
