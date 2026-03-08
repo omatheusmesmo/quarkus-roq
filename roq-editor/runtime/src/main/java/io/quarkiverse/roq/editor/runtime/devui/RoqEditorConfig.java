@@ -86,7 +86,7 @@ public interface RoqEditorConfig {
             /**
              * Enable automatic sync (pull) from remote
              */
-            @WithDefault("false")
+            @WithDefault("true")
             boolean enabled();
 
             /**
