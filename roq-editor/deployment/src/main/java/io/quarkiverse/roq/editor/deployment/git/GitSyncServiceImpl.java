@@ -13,6 +13,7 @@ import org.eclipse.jgit.lib.BranchTrackingStatus;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.lib.RepositoryState;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
+import org.eclipse.jgit.transport.FetchResult;
 import org.eclipse.jgit.transport.PushResult;
 import org.eclipse.jgit.transport.RemoteRefUpdate;
 import org.jboss.logging.Logger;
@@ -29,9 +30,7 @@ public class GitSyncServiceImpl implements GitSyncService {
 
     private static final Logger LOG = Logger.getLogger(GitSyncServiceImpl.class);
 
-    private static final String MSG_STASH_BEFORE_SYNC = "Stashing local changes before sync.";
     private static final String MSG_RESTORE_STASH_AFTER_SYNC = "Restoring local changes after sync.";
-    private static final String MSG_AUTO_MERGE_DURING_PUBLISH = "Performing auto-merge during publish due to remote changes.";
     private static final String MSG_SYNC_SUCCESS = "Synchronized successfully with remote";
     private static final String MSG_PUSH_SUCCESS = "Changes pushed successfully";
     private static final String MSG_REPO_NOT_FOUND = "Git repository not found";
@@ -90,15 +89,33 @@ public class GitSyncServiceImpl implements GitSyncService {
                 }
 
                 BranchTrackingStatus trackingStatus = BranchTrackingStatus.of(repository, currentBranch);
-                int aheadCount = (trackingStatus != null) ? trackingStatus.getAheadCount() : 0;
-                int behindCount = (trackingStatus != null) ? trackingStatus.getBehindCount() : 0;
+                if (trackingStatus == null && !"HEAD".equals(currentBranch)) {
+                    if (repository.resolve("refs/remotes/origin/" + currentBranch) != null) {
+                        LOG.info("Auto-configuring tracking for branch " + currentBranch + " to origin/" + currentBranch);
+                        org.eclipse.jgit.lib.StoredConfig config = repository.getConfig();
+                        config.setString("branch", currentBranch, "remote", "origin");
+                        config.setString("branch", currentBranch, "merge", "refs/heads/" + currentBranch);
+                        config.save();
+                        trackingStatus = BranchTrackingStatus.of(repository, currentBranch);
+                    }
+                }
 
-                boolean isUpToDate = aheadCount == 0 && behindCount == 0 && !hasUnpublished && repoState == RepositoryState.SAFE
-                        && !hasConflicts && !authFailed && !authRequired;
+                if (trackingStatus != null) {
+                    int aheadCount = trackingStatus.getAheadCount();
+                    int behindCount = trackingStatus.getBehindCount();
 
-                return new GitStatusInfo(isUpToDate, hasUnpublished, behindCount > 0, currentBranch,
-                        aheadCount, behindCount, contentChanges, authFailed || authRequired, hasConflicts, repoState.name(),
-                        conflictFiles, isSsh);
+                    boolean isUpToDate = aheadCount == 0 && behindCount == 0 && !hasUnpublished
+                            && repoState == RepositoryState.SAFE
+                            && !hasConflicts && !authFailed && !authRequired;
+
+                    return new GitStatusInfo(isUpToDate, hasUnpublished, behindCount > 0, currentBranch,
+                            aheadCount, behindCount, contentChanges, authFailed || authRequired, hasConflicts, repoState.name(),
+                            conflictFiles, isSsh);
+                } else {
+                    return new GitStatusInfo(!hasUnpublished, hasUnpublished, false, currentBranch,
+                            0, 0, contentChanges, authFailed || authRequired, hasConflicts, repoState.name(),
+                            conflictFiles, isSsh);
+                }
             }
         } catch (Exception e) {
             return handleStatusFailure(e);
@@ -126,7 +143,6 @@ public class GitSyncServiceImpl implements GitSyncService {
 
                 boolean wasDirty = !git.status().call().isClean();
                 if (wasDirty) {
-                    LOG.debug(MSG_STASH_BEFORE_SYNC);
                     git.stashCreate().setIncludeUntracked(true).call();
                 }
 
@@ -262,7 +278,10 @@ public class GitSyncServiceImpl implements GitSyncService {
      */
     private boolean tryFetch(Git git, String passphrase, boolean isSsh) {
         try {
-            performFetch(git, passphrase);
+            FetchResult result = git.fetch()
+                    .setTransportConfigCallback(GitTransportHelper.createTransportCallback(passphrase))
+                    .setCheckFetchedObjects(true)
+                    .call();
             return false;
         } catch (Exception fetchEx) {
             if (GitTransportHelper.isAuthenticationError(fetchEx) && isSsh) {
@@ -291,8 +310,6 @@ public class GitSyncServiceImpl implements GitSyncService {
         boolean authFailed = GitTransportHelper.isAuthenticationError(e) && isSsh;
         if (authFailed) {
             LOG.warn("SSH authentication failed: " + e.getMessage());
-        } else if (!GitTransportHelper.isAuthenticationError(e)) {
-            LOG.error("Failed to retrieve Git repository status", e);
         }
 
         try (Repository repository = openRepository()) {
@@ -339,7 +356,6 @@ public class GitSyncServiceImpl implements GitSyncService {
                 LOG.warn("Sync authentication failed: " + e.getMessage());
                 return new GitSyncResult(false, GitTransportHelper.ERR_AUTH_FAILED, false, Collections.emptyList(), true);
             }
-            LOG.error("Content synchronization failed", e);
             return new GitSyncResult(false, "Sync failed: " + e.getMessage(), false, Collections.emptyList(), false);
         }
     }
@@ -376,8 +392,6 @@ public class GitSyncServiceImpl implements GitSyncService {
         boolean isAuth = GitTransportHelper.isAuthenticationError(e) && isSsh;
         if (isAuth) {
             LOG.warn("Push authentication failed: " + e.getMessage());
-        } else {
-            LOG.error("Push operation failed", e);
         }
         return new GitSyncResult(false, "Push error: " + e.getMessage(), false, Collections.emptyList(), isAuth);
     }
@@ -389,7 +403,6 @@ public class GitSyncServiceImpl implements GitSyncService {
         BranchTrackingStatus trackingStatus = BranchTrackingStatus.of(repository, repository.getBranch());
         int behindCount = (trackingStatus != null) ? trackingStatus.getBehindCount() : 0;
         if (behindCount > 0 && repository.getRepositoryState() == RepositoryState.SAFE) {
-            LOG.debug(MSG_AUTO_MERGE_DURING_PUBLISH);
             return sync(passphrase);
         }
         return null;
@@ -409,8 +422,6 @@ public class GitSyncServiceImpl implements GitSyncService {
         boolean isAuth = GitTransportHelper.isAuthenticationError(e) && isSsh;
         if (isAuth) {
             LOG.warn("Publish authentication failed: " + e.getMessage());
-        } else {
-            LOG.error("Publishing operation failed", e);
         }
         return new GitSyncResult(false, "Publish error: " + e.getMessage(), false, Collections.emptyList(), isAuth);
     }
@@ -436,6 +447,8 @@ public class GitSyncServiceImpl implements GitSyncService {
      * @throws Exception if an error occurs during fetch
      */
     private void performFetch(Git git, String passphrase) throws Exception {
-        git.fetch().setTransportConfigCallback(GitTransportHelper.createTransportCallback(passphrase)).call();
+        git.fetch()
+                .setTransportConfigCallback(GitTransportHelper.createTransportCallback(passphrase))
+                .call();
     }
 }
