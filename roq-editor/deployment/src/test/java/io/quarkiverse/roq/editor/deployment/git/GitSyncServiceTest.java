@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.lib.BranchTrackingStatus;
 import org.eclipse.jgit.lib.RepositoryState;
 import org.eclipse.jgit.lib.StoredConfig;
 import org.junit.jupiter.api.AfterEach;
@@ -406,6 +407,34 @@ class GitSyncServiceTest {
         assertThat(status.ahead()).isEqualTo(1);
         assertThat(status.hasUnpublished()).isTrue();
         assertThat(status.pendingFiles()).contains("content/dirty.md");
+    }
+
+    @Test
+    void shouldAutoConfigureTrackingForBranchWithoutUpstream() throws Exception {
+        String newBranch = "feature-branch";
+        localRepository.branchCreate().setName(newBranch).call();
+        localRepository.checkout().setName(newBranch).call();
+
+        Path otherPersonDir = Files.createTempDirectory("roq-other-person-");
+        try (Git otherGit = Git.cloneRepository()
+                .setURI(remoteDirectory.toUri().toString())
+                .setDirectory(otherPersonDir.toFile())
+                .call()) {
+            otherGit.checkout().setCreateBranch(true).setName(newBranch).call();
+            Files.writeString(otherPersonDir.resolve("content/feature.md"), "feature content");
+            otherGit.add().addFilepattern("content/feature.md").call();
+            otherGit.commit().setMessage("Feature commit").call();
+            otherGit.push().setRemote("origin").call();
+        }
+        assertThat(BranchTrackingStatus.of(localRepository.getRepository(), newBranch)).isNull();
+
+        GitStatusInfo status = gitSyncService.getStatus(null, false);
+
+        assertThat(status.branch()).isEqualTo(newBranch);
+        assertThat(status.behind()).isEqualTo(1);
+
+        assertThat(BranchTrackingStatus.of(localRepository.getRepository(), newBranch)).isNotNull();
+        cleanDirectory(otherPersonDir);
     }
 
     private RoqSiteConfig createSiteConfig() {
