@@ -8,7 +8,7 @@ description: ""
 
 # Hello from remote. :p
 
-# Hello again!
+# Hello again!@
 
 # &nbsp;
 
@@ -16,5 +16,9 @@ description: ""
 
 # Hello again!#
 
+<<<<<<< HEAD
 
 &nbsp;
+=======
+&nbsp;
+>>>>>>> stash
