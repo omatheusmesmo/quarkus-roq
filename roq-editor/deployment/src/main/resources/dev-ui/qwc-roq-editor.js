@@ -128,7 +128,8 @@ export class QwcRoqEditor extends LitElement {
                 {
                     onPassphraseRequired: (errorMsg) => this._showPassphraseDialog(errorMsg),
                     onNotification: (msg, type) => showNotification(msg, type),
-                    onConflict: (files) => showConflictDialog(files)
+                    onConflict: (files) => showConflictDialog(files),
+                    onBusy: (isBusy) => { this._syncing = isBusy; }
                 }
             );
             this._syncManager.start();
@@ -183,7 +184,6 @@ export class QwcRoqEditor extends LitElement {
                 if (updatedItem && JSON.stringify(this._selectedPage) !== JSON.stringify(updatedItem)) {
                     // Update selected post/page with fresh URL
                     this._selectedPage = updatedItem;
-                    console.log('new url detected for preview', updatedItem.url);
                 }
             }
 
@@ -572,9 +572,9 @@ export class QwcRoqEditor extends LitElement {
         this.shadowRoot?.querySelector('passphrase-dialog')?.show(errorMsg);
     }
 
-    _onPassphraseConfirmed(e) {
+    async _onPassphraseConfirmed(e) {
         const { passphrase } = e.detail;
-        this._syncManager.setPassphrase(passphrase);
+        await this._syncManager.setPassphrase(passphrase);
         if (this._pendingSyncOperation) {
             const operation = this._pendingSyncOperation;
             this._pendingSyncOperation = null;

@@ -19,6 +19,7 @@ export class SyncManager {
         this.onPassphraseRequired = callbacks.onPassphraseRequired;
         this.onNotification = callbacks.onNotification;
         this.onConflict = callbacks.onConflict;
+        this.onBusy = callbacks.onBusy || (() => {});
         
         this.status = null;
         this.passphrase = null;
@@ -42,12 +43,10 @@ export class SyncManager {
         this.refreshStatus(false);
         
         this.intervalId = setInterval(async () => {
-            if (this.status?.authFailed && !this.passphrase) {
-                return;
-            }
-
+            const isAuthBlocked = this.status?.authFailed && !this.passphrase;
+            const skipFetch = isAuthBlocked || (this.pollingCount % 6 !== 0);
+            
             this.pollingCount++;
-            const skipFetch = (this.pollingCount % 6 !== 0);
             const status = await this.refreshStatus(skipFetch);
             
             if (!status || status.hasConflicts) return;
@@ -118,45 +117,56 @@ export class SyncManager {
      * @returns {Promise<Object>} The updated status information
      */
     async refreshStatus(skipFetch = true) {
-        try {
-            const response = await this.jsonRpc.getSyncStatus({ 
-                passphrase: this.passphrase, 
-                skipFetch 
-            });
-            const statusInfo = response.result;
-            if (!statusInfo) return;
-
-            this.status = statusInfo;
-            
-            if (statusInfo.authFailed && statusInfo.isSsh) {
-                const isNewFailure = !!this.passphrase;
-                if (isNewFailure) {
-                    console.warn("[SyncManager] SSH authentication failed with the provided passphrase.");
-                    this.authError = true;
-                    this.passphrase = null;
-                    this.onPassphraseRequired("SSH authentication failed. Please check your passphrase.");
-                } else if (!this.authError) {
-                    this.onPassphraseRequired(null);
-                }
-            } else if (!statusInfo.authFailed) {
-                this.authError = false;
-            }
-            
-            this.onStatusChange(statusInfo);
-            return statusInfo;
-        } catch (error) {
-            console.error("[SyncManager] Failed to refresh Git status", error);
+        if (this._refreshingPromise) {
+            return await this._refreshingPromise;
         }
+
+        this._refreshingPromise = (async () => {
+            if (!skipFetch) this.onBusy(true);
+            try {
+                const response = await this.jsonRpc.getSyncStatus({ 
+                    passphrase: this.passphrase, 
+                    skipFetch 
+                });
+                const statusInfo = response.result;
+                if (!statusInfo) return;
+
+                this.status = statusInfo;
+                
+                if (statusInfo.authFailed && statusInfo.isSsh) {
+                    const isNewFailure = !!this.passphrase;
+                    if (isNewFailure) {
+                        this.authError = true;
+                        this.passphrase = null;
+                        this.onPassphraseRequired("SSH authentication failed. Please check your passphrase.");
+                    } else if (!this.authError) {
+                        this.onPassphraseRequired(null);
+                    }
+                } else if (!statusInfo.authFailed) {
+                    this.authError = false;
+                }
+                
+                this.onStatusChange(statusInfo);
+                return statusInfo;
+            } catch (error) {
+                console.error("[SyncManager] Failed to refresh Git status", error);
+            } finally {
+                if (!skipFetch) this.onBusy(false);
+                this._refreshingPromise = null;
+            }
+        })();
+
+        return await this._refreshingPromise;
     }
 
     /**
      * Sets the SSH passphrase and triggers an immediate refresh to validate it.
      * @param {string} passphrase - The SSH passphrase
      */
-    setPassphrase(passphrase) {
+    async setPassphrase(passphrase) {
         this.passphrase = passphrase;
         this.authError = false;
-        this.refreshStatus(false);
+        await this.refreshStatus(false);
     }
 
     /**
