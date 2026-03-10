@@ -617,8 +617,8 @@ export class QwcRoqEditor extends LitElement {
     }
 
     async _onPublishRequested(event) {
-        const freshStatus = await this._syncManager?.refreshStatus();
-        const files = freshStatus?.contentChanges ?? [];
+        const freshStatus = await this._syncManager?.refreshStatus(false);
+        const files = freshStatus?.pendingFiles ?? [];
 
         let selectedFiles = files;
         if (files.length > 1) {

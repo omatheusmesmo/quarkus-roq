@@ -90,7 +90,7 @@ export class SyncManager {
                         try {
                             if (!status.isSsh || this.passphrase) {
                                 const message = this.syncConfig?.commitMessage?.template || "Auto-update via Roq Editor";
-                                await this.manualPublish(message, status.contentChanges || []);
+                                await this.manualPublish(message, status.pendingFiles || []);
                                 this.lastAutoPublishTime = now;
                             }
                         } catch (e) {
