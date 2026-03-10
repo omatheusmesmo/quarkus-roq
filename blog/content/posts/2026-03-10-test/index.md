@@ -9,3 +9,6 @@ testing from local repo!
 testing from remote repo!
 
 testing from local repo, but with auto publish!
+
+
+testing from remote repo, but with auto sync!
