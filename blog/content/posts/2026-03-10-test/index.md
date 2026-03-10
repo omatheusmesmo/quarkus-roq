@@ -7,3 +7,5 @@ description: ""
 testing from local repo!
 
 testing from remote repo!
+
+testing from local repo, but with auto publish!
