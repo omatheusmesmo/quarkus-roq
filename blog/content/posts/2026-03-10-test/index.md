@@ -11,3 +11,7 @@ test from remote repo
 &nbsp;
 
 manual commit
+
+&nbsp;
+
+manual local change
