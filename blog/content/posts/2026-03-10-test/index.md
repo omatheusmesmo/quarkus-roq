@@ -8,7 +8,7 @@ test from local repo auto
 
 test from remote repo
 
-&nbsp;
+Remote change to manual sync
 
 manual commit
 
