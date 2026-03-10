@@ -410,8 +410,43 @@ class GitSyncServiceTest {
     }
 
     @Test
-    void shouldAutoConfigureTrackingForBranchWithoutUpstream() throws Exception {
+    void shouldReportStatusEvenForBranchWithoutUpstream() throws Exception {
         String newBranch = "feature-branch";
+        localRepository.branchCreate().setName(newBranch).call();
+        localRepository.checkout().setName(newBranch).call();
+
+        Path otherPersonDir = Files.createTempDirectory("roq-other-person-");
+        try (Git otherGit = Git.cloneRepository()
+                .setURI(remoteDirectory.toUri().toString())
+                .setDirectory(otherPersonDir.toFile())
+                .call()) {
+            otherGit.checkout().setCreateBranch(true).setName(newBranch).call();
+            Files.writeString(otherPersonDir.resolve("content/remote-feature.md"), "remote content");
+            otherGit.add().addFilepattern("content/remote-feature.md").call();
+            otherGit.commit().setMessage("Remote feature commit").call();
+            otherGit.push().setRemote("origin").call();
+        }
+
+        Files.writeString(localDirectory.resolve("content/local-feature.md"), "local content");
+        localRepository.add().addFilepattern("content/local-feature.md").call();
+        localRepository.commit().setMessage("Local feature commit").call();
+
+        assertThat(BranchTrackingStatus.of(localRepository.getRepository(), newBranch)).isNull();
+
+        GitStatusInfo status = gitSyncService.getStatus(null, false);
+
+        assertThat(status.branch()).isEqualTo(newBranch);
+        assertThat(status.behind()).isEqualTo(1);
+        assertThat(status.ahead()).isEqualTo(1);
+
+        assertThat(BranchTrackingStatus.of(localRepository.getRepository(), newBranch)).isNull();
+
+        cleanDirectory(otherPersonDir);
+    }
+
+    @Test
+    void shouldAutoConfigureTrackingDuringSync() throws Exception {
+        String newBranch = "feature-sync-branch";
         localRepository.branchCreate().setName(newBranch).call();
         localRepository.checkout().setName(newBranch).call();
 
@@ -426,14 +461,14 @@ class GitSyncServiceTest {
             otherGit.commit().setMessage("Feature commit").call();
             otherGit.push().setRemote("origin").call();
         }
+
         assertThat(BranchTrackingStatus.of(localRepository.getRepository(), newBranch)).isNull();
 
-        GitStatusInfo status = gitSyncService.getStatus(null, false);
+        GitSyncResult result = gitSyncService.sync(null);
 
-        assertThat(status.branch()).isEqualTo(newBranch);
-        assertThat(status.behind()).isEqualTo(1);
-
+        assertThat(result.success()).isTrue();
         assertThat(BranchTrackingStatus.of(localRepository.getRepository(), newBranch)).isNotNull();
+
         cleanDirectory(otherPersonDir);
     }
 
