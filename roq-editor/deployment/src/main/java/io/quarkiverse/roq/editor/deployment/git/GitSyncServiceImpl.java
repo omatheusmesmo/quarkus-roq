@@ -2,10 +2,14 @@ package io.quarkiverse.roq.editor.deployment.git;
 
 import java.io.File;
 import java.io.IOException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.PullResult;
@@ -26,6 +30,8 @@ import org.eclipse.jgit.transport.RemoteRefUpdate;
 import org.jboss.logging.Logger;
 
 import io.quarkiverse.roq.editor.runtime.devui.RoqEditorConfig;
+import io.quarkiverse.roq.editor.runtime.devui.RoqEditorConfig.SyncConfig.Mode;
+import io.quarkiverse.roq.editor.runtime.devui.RoqEditorConfig.SyncConfig.PrFlowConfig.CommitStrategy;
 import io.quarkiverse.roq.editor.runtime.devui.git.GitStatusInfo;
 import io.quarkiverse.roq.editor.runtime.devui.git.GitSyncResult;
 import io.quarkiverse.roq.frontmatter.runtime.config.RoqSiteConfig;
@@ -44,8 +50,14 @@ public class GitSyncServiceImpl implements GitSyncService {
     private static final String MSG_PUSH_SUCCESS = "Changes pushed successfully";
     private static final String MSG_REPO_NOT_FOUND = "Git repository not found";
     private static final String MSG_NO_GIT_REPO = "no-git-repo";
+    private static final String MSG_NOTHING_TO_PUBLISH = "Nothing to publish";
+
+    private static final DateTimeFormatter BRANCH_TIMESTAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmm");
+    private static final Pattern PR_URL_PATTERN = Pattern.compile(
+            "https?://\\S+?(?:pull/new/|pull-requests/new|merge_requests/new)\\S*");
 
     private final File rootDirectory;
+    private final RoqEditorConfig editorConfig;
     private final GitContentFilter contentFilter;
     private final GitOperationHelper operationHelper;
     private final ReentrantLock lock = new ReentrantLock();
@@ -63,6 +75,7 @@ public class GitSyncServiceImpl implements GitSyncService {
      */
     public GitSyncServiceImpl(RoqEditorConfig editorConfig, RoqSiteConfig siteConfig, File rootDirectory) {
         this.rootDirectory = rootDirectory;
+        this.editorConfig = editorConfig;
         this.contentFilter = new GitContentFilter(siteConfig, rootDirectory);
         this.operationHelper = new GitOperationHelper(editorConfig, contentFilter);
         this.configuredPassphrase = editorConfig.sync().sshPassphrase().filter(p -> !p.isEmpty()).orElse(null);
@@ -260,13 +273,11 @@ public class GitSyncServiceImpl implements GitSyncService {
 
     /**
      * Publishes changes by staging, committing, and pushing to the remote repository.
-     *
-     * @param commitMessage the commit message
-     * @param filePaths the file paths to publish
-     * @return the result of the publish operation
+     * Dispatches between direct push (legacy) and PR-based flow based on configured
+     * {@link Mode}.
      */
     @Override
-    public GitSyncResult publish(String commitMessage, List<String> filePaths) {
+    public GitSyncResult publish(String commitMessage, List<String> filePaths, String branchNameOverride) {
         lock.lock();
         try (Repository repository = openRepository()) {
             if (repository == null) {
@@ -274,33 +285,10 @@ public class GitSyncServiceImpl implements GitSyncService {
             }
 
             try (Git git = new Git(repository)) {
-                operationHelper.stageChanges(git, repository, filePaths);
-
-                GitSyncResult stateResult = operationHelper.finalizeState(git, repository, commitMessage);
-                if (stateResult != null) {
-                    return stateResult;
+                if (editorConfig.sync().mode() == Mode.DIRECT) {
+                    return doDirectPublish(git, repository, commitMessage, filePaths);
                 }
-
-                tryFetch(git, GitTransportHelper.isSsh(repository));
-
-                BranchTrackingStatus trackingStatus = BranchTrackingStatus.of(repository, repository.getBranch());
-                if (trackingStatus != null && trackingStatus.getBehindCount() > 0
-                        && repository.getRepositoryState() == RepositoryState.SAFE) {
-                    LOG.debug(MSG_AUTO_MERGE_DURING_PUBLISH);
-                    GitSyncResult syncResult = doSync(git, repository);
-                    if (!syncResult.success()) {
-                        return syncResult;
-                    }
-                }
-
-                RepositoryState state = repository.getRepositoryState();
-                if (state != RepositoryState.SAFE) {
-                    return new GitSyncResult(true,
-                            "Partial resolution successful (State: " + state + "). Continue resolving/publishing.", false,
-                            Collections.emptyList(), false);
-                }
-
-                return doPush(git, repository);
+                return doPrFlowPublish(git, repository, commitMessage, filePaths, branchNameOverride);
             }
         } catch (Exception e) {
             return handlePublishFailure(e);
@@ -309,19 +297,282 @@ public class GitSyncServiceImpl implements GitSyncService {
         }
     }
 
-    /**
-     * Publishes changes and then synchronizes with the remote repository.
-     *
-     * @param commitMessage the commit message
-     * @param filePaths the file paths to publish
-     * @return the result of the publish and sync operation
-     */
     @Override
-    public GitSyncResult publishAndSync(String commitMessage, List<String> filePaths) {
-        GitSyncResult publishResult = publish(commitMessage, filePaths);
+    public GitSyncResult publishAndSync(String commitMessage, List<String> filePaths, String branchNameOverride) {
+        GitSyncResult publishResult = publish(commitMessage, filePaths, branchNameOverride);
         if (!publishResult.success())
             return publishResult;
         return sync();
+    }
+
+    /**
+     * Original direct-push flow: stage, commit, optionally merge if behind, then push to the current branch.
+     */
+    private GitSyncResult doDirectPublish(Git git, Repository repository, String commitMessage, List<String> filePaths)
+            throws Exception {
+        operationHelper.stageChanges(git, repository, filePaths);
+
+        GitSyncResult stateResult = operationHelper.finalizeState(git, repository, commitMessage);
+        if (stateResult != null) {
+            return stateResult;
+        }
+
+        tryFetch(git, GitTransportHelper.isSsh(repository));
+
+        BranchTrackingStatus trackingStatus = BranchTrackingStatus.of(repository, repository.getBranch());
+        if (trackingStatus != null && trackingStatus.getBehindCount() > 0
+                && repository.getRepositoryState() == RepositoryState.SAFE) {
+            LOG.debug(MSG_AUTO_MERGE_DURING_PUBLISH);
+            GitSyncResult syncResult = doSync(git, repository);
+            if (!syncResult.success()) {
+                return syncResult;
+            }
+        }
+
+        RepositoryState state = repository.getRepositoryState();
+        if (state != RepositoryState.SAFE) {
+            return new GitSyncResult(true,
+                    "Partial resolution successful (State: " + state + "). Continue resolving/publishing.", false,
+                    Collections.emptyList(), false);
+        }
+
+        return doPush(git, repository);
+    }
+
+    /**
+     * PR-based flow. The current branch determines the action:
+     * <ul>
+     * <li>On the main branch: stage, create a content branch, commit, push -u, surface PR link.</li>
+     * <li>On a content branch with the remote ref still present: stage, commit (or amend), push.</li>
+     * <li>On a content branch whose remote ref was pruned (PR merged): stash, return to main, pull,
+     * pop stash, and start a fresh content-branch cycle.</li>
+     * <li>On any other branch: fall back to the direct-push flow.</li>
+     * </ul>
+     */
+    private GitSyncResult doPrFlowPublish(Git git, Repository repository, String commitMessage, List<String> filePaths,
+            String branchNameOverride) throws Exception {
+        String mainBranch = resolveMainBranch(repository);
+        String currentBranch = repository.getBranch();
+        String prefix = editorConfig.sync().prFlow().contentBranchPrefix();
+
+        if (!currentBranch.equals(mainBranch) && currentBranch.startsWith(prefix)) {
+            fetchAndPrune(git, repository);
+            if (remoteBranchExists(repository, currentBranch)) {
+                return publishOnContentBranch(git, repository, commitMessage, filePaths, currentBranch);
+            }
+            GitSyncResult switched = switchBackToMain(git, repository, mainBranch);
+            if (!switched.success()) {
+                return switched;
+            }
+            currentBranch = mainBranch;
+        }
+
+        if (currentBranch.equals(mainBranch)) {
+            return startContentBranchCycle(git, repository, commitMessage, filePaths, branchNameOverride);
+        }
+
+        LOG.debug("PR mode: current branch '" + currentBranch
+                + "' is neither the main branch nor a content branch; falling back to direct publish");
+        return doDirectPublish(git, repository, commitMessage, filePaths);
+    }
+
+    /**
+     * Stages pending content edits, branches off main, commits, and pushes with upstream tracking.
+     * Extracts a PR-creation URL from the remote messages when the host provides one.
+     */
+    private GitSyncResult startContentBranchCycle(Git git, Repository repository, String commitMessage,
+            List<String> filePaths, String branchNameOverride) throws Exception {
+        operationHelper.stageChanges(git, repository, filePaths);
+        if (!operationHelper.hasStagedChanges(git) && repository.getRepositoryState() == RepositoryState.SAFE) {
+            return new GitSyncResult(true, MSG_NOTHING_TO_PUBLISH, false, Collections.emptyList(), false);
+        }
+
+        String newBranch = resolveNewBranchName(repository, branchNameOverride);
+        git.checkout().setCreateBranch(true).setName(newBranch).call();
+
+        GitSyncResult stateResult = operationHelper.finalizeState(git, repository, commitMessage);
+        if (stateResult != null) {
+            return stateResult;
+        }
+
+        return pushContentBranch(git, repository, newBranch, false);
+    }
+
+    /**
+     * Updates an existing content branch with a new commit (or amends the previous one) and pushes.
+     */
+    private GitSyncResult publishOnContentBranch(Git git, Repository repository, String commitMessage,
+            List<String> filePaths, String branchName) throws Exception {
+        operationHelper.stageChanges(git, repository, filePaths);
+
+        CommitStrategy strategy = editorConfig.sync().prFlow().commitStrategy();
+        boolean amend = strategy == CommitStrategy.AMEND
+                && hasCommitsBeyond(repository, branchName, resolveMainBranch(repository));
+
+        if (operationHelper.hasStagedChanges(git) || repository.getRepositoryState() == RepositoryState.MERGING) {
+            String msg = (commitMessage == null || commitMessage.isBlank())
+                    ? editorConfig.sync().commitMessage().template()
+                    : commitMessage;
+            git.commit().setMessage(msg).setAmend(amend).call();
+        } else if (repository.getRepositoryState().isRebasing()) {
+            GitSyncResult stateResult = operationHelper.finalizeState(git, repository, commitMessage);
+            if (stateResult != null) {
+                return stateResult;
+            }
+        } else {
+            return new GitSyncResult(true, MSG_NOTHING_TO_PUBLISH, false, Collections.emptyList(), false);
+        }
+
+        return pushContentBranch(git, repository, branchName, amend);
+    }
+
+    private GitSyncResult pushContentBranch(Git git, Repository repository, String branchName, boolean force)
+            throws Exception {
+        Iterable<PushResult> results = configureTransport(
+                git.push().setRemote("origin").setForce(force).add("refs/heads/" + branchName),
+                repository).call();
+
+        String prUrl = null;
+        for (PushResult pushResult : results) {
+            for (RemoteRefUpdate update : pushResult.getRemoteUpdates()) {
+                RemoteRefUpdate.Status updateStatus = update.getStatus();
+                if (updateStatus != RemoteRefUpdate.Status.OK
+                        && updateStatus != RemoteRefUpdate.Status.UP_TO_DATE) {
+                    return new GitSyncResult(false,
+                            "Push failed: " + updateStatus + " (" + update.getMessage() + ")",
+                            false, Collections.emptyList(), false);
+                }
+            }
+            String messages = pushResult.getMessages();
+            if (prUrl == null && messages != null) {
+                prUrl = extractPrCreationUrl(messages);
+            }
+        }
+
+        configureBranchTracking(repository, branchName);
+        return new GitSyncResult(true, MSG_PUSH_SUCCESS, false, Collections.emptyList(), false, prUrl, branchName);
+    }
+
+    /**
+     * Returns the editor to the main branch after the content branch's remote ref disappears
+     * (typically because the PR was merged or closed). Local edits are preserved via stash.
+     */
+    private GitSyncResult switchBackToMain(Git git, Repository repository, String mainBranch) throws Exception {
+        boolean wasDirty = !git.status().call().isClean();
+        if (wasDirty) {
+            git.stashCreate().setIncludeUntracked(true).call();
+        }
+
+        git.checkout().setName(mainBranch).call();
+
+        GitSyncResult pullResult = performPull(git, repository);
+        if (!pullResult.success()) {
+            if (wasDirty) {
+                operationHelper.restoreStash(git, pullResult, MSG_RESTORE_STASH_AFTER_SYNC);
+            }
+            return pullResult;
+        }
+
+        if (wasDirty) {
+            return operationHelper.restoreStash(git, pullResult, MSG_RESTORE_STASH_AFTER_SYNC);
+        }
+        return pullResult;
+    }
+
+    private void fetchAndPrune(Git git, Repository repository) {
+        try {
+            configureTransport(git.fetch().setRemote("origin").setRemoveDeletedRefs(true), repository).call();
+        } catch (Exception e) {
+            LOG.debug("Fetch+prune failed (will continue with cached refs): " + e.getMessage());
+        }
+    }
+
+    private boolean remoteBranchExists(Repository repository, String branchName) throws IOException {
+        return repository.findRef("refs/remotes/origin/" + branchName) != null;
+    }
+
+    /**
+     * Returns true when {@code branchName} contains at least one commit not reachable from
+     * {@code baseBranch} — i.e., there is something on this content branch worth amending.
+     */
+    private boolean hasCommitsBeyond(Repository repository, String branchName, String baseBranch) throws IOException {
+        ObjectId branchHead = repository.resolve(branchName);
+        ObjectId baseHead = repository.resolve(baseBranch);
+        if (branchHead == null || baseHead == null) {
+            return false;
+        }
+        try (RevWalk walk = new RevWalk(repository)) {
+            walk.markStart(walk.parseCommit(branchHead));
+            walk.markUninteresting(walk.parseCommit(baseHead));
+            return walk.iterator().hasNext();
+        }
+    }
+
+    private String resolveMainBranch(Repository repository) throws IOException {
+        return editorConfig.sync().prFlow().mainBranch()
+                .filter(b -> !b.isBlank())
+                .orElseGet(() -> detectDefaultBranch(repository));
+    }
+
+    private String detectDefaultBranch(Repository repository) {
+        try {
+            Ref head = repository.findRef("refs/remotes/origin/HEAD");
+            if (head != null && head.isSymbolic()) {
+                String target = head.getTarget().getName();
+                String prefix = "refs/remotes/origin/";
+                if (target.startsWith(prefix)) {
+                    return target.substring(prefix.length());
+                }
+            }
+            if (repository.findRef("refs/heads/main") != null) {
+                return "main";
+            }
+            if (repository.findRef("refs/heads/master") != null) {
+                return "master";
+            }
+        } catch (IOException ignored) {
+        }
+        return "main";
+    }
+
+    private String resolveNewBranchName(Repository repository, String override) throws IOException {
+        String prefix = editorConfig.sync().prFlow().contentBranchPrefix();
+        String base;
+        if (override != null && !override.isBlank()) {
+            String sanitized = override.replaceAll("[^A-Za-z0-9._/-]", "-");
+            base = sanitized.startsWith(prefix) ? sanitized : prefix + sanitized;
+        } else {
+            base = prefix + "update-" + LocalDateTime.now().format(BRANCH_TIMESTAMP);
+        }
+
+        String candidate = base;
+        int suffix = 2;
+        while (branchNameTaken(repository, candidate)) {
+            candidate = base + "-" + suffix++;
+        }
+        return candidate;
+    }
+
+    private boolean branchNameTaken(Repository repository, String name) throws IOException {
+        return repository.findRef("refs/heads/" + name) != null
+                || repository.findRef("refs/remotes/origin/" + name) != null;
+    }
+
+    private void configureBranchTracking(Repository repository, String branchName) throws IOException {
+        StoredConfig config = repository.getConfig();
+        if (config.getString("branch", branchName, "remote") == null) {
+            config.setString("branch", branchName, "remote", "origin");
+            config.setString("branch", branchName, "merge", "refs/heads/" + branchName);
+            config.save();
+        }
+    }
+
+    static String extractPrCreationUrl(String pushMessages) {
+        if (pushMessages == null || pushMessages.isEmpty()) {
+            return null;
+        }
+        Matcher matcher = PR_URL_PATTERN.matcher(pushMessages);
+        return matcher.find() ? matcher.group() : null;
     }
 
     /**
